@@ -30,22 +30,22 @@ BOOL DirectoryExists(LPCSTR szPath)
 static_assert(sizeof(FILETIME) == sizeof(uint64_t));
 FILETIME GetFileModifiedTime(LPCWSTR lpFileName)
 {
-    HANDLE hFile;
-    FILETIME CreationTime;
-    FILETIME LastAccessTime;
-    FILETIME LastWriteTime;
+	HANDLE hFile;
+	FILETIME CreationTime;
+	FILETIME LastAccessTime;
+	FILETIME LastWriteTime;
 
-    hFile = CreateFile(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE)
-    {
+	hFile = CreateFile(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
 		if (GetFileTime(hFile, &CreationTime, &LastAccessTime, &LastWriteTime))
-        {
+		{
 			CloseHandle(hFile);
-            return LastWriteTime;
-        }
-        CloseHandle(hFile);
-    }
-    return {};
+			return LastWriteTime;
+		}
+		CloseHandle(hFile);
+	}
+	return {};
 }
 
 FILETIME GetFileModifiedTimeA(LPCSTR lpFileName)
@@ -70,19 +70,19 @@ FILETIME GetFileModifiedTimeA(LPCSTR lpFileName)
 
 std::string GetTempDir(const char* temp_dir, size_t hash)
 {
-    std::string temp_folder = temp_dir;
-    temp_folder += "\\";
-    temp_folder += std::to_string(hash);
-    return temp_folder;
+	std::string temp_folder = temp_dir;
+	temp_folder += "\\";
+	temp_folder += std::to_string(hash);
+	return temp_folder;
 }
 
 bool CheckIfOutOfDate(const char* cache_dir)
 {
-    if (!DirectoryExists(cache_dir))
-    {
-		CreateDirectoryA(cache_dir,NULL);
-        return true;
-    }
+	if (!DirectoryExists(cache_dir))
+	{
+		CreateDirectoryA(cache_dir, NULL);
+		return true;
+	}
 
 	// Process read files - Check modified times have not changed
 	{
@@ -133,10 +133,10 @@ bool CheckIfOutOfDate(const char* cache_dir)
 
 std::string BuildTrackerCommandLine(const char* tracker_path, const char* cache_folder, const char* command_line)
 {
-    std::stringstream s;
-    s << "\"" << tracker_path << "\"" << " /i \"" << cache_folder << "\" /c ";
-    s << command_line;
-    return s.str();
+	std::stringstream s;
+	s << "\"" << tracker_path << "\"" << " /i \"" << cache_folder << "\" /c ";
+	s << command_line;
+	return s.str();
 }
 
 DWORD RunCommand(char* cmd)
@@ -151,7 +151,7 @@ DWORD RunCommand(char* cmd)
 
 	// Start the child process. 
 	if (!CreateProcessA(NULL,   // No module name (use command line)
-        cmd,        // Command line
+		cmd,        // Command line
 		NULL,       // Process handle not inheritable
 		NULL,       // Thread handle not inheritable
 		FALSE,      // Set handle inheritance to FALSE
@@ -168,7 +168,7 @@ DWORD RunCommand(char* cmd)
 
 	// Wait until child process exits.
 	WaitForSingleObject(pi.hProcess, INFINITE);
-	
+
 	DWORD exit_code = -1;
 	GetExitCodeProcess(pi.hProcess, &exit_code);
 
@@ -239,10 +239,10 @@ void ClearCacheDir(const char* cache_dir)
 
 void BuildCacheFile(const char* cache_dir)
 {
-    std::unordered_map<std::wstring, FILETIME> read_files;
-    std::unordered_map<std::wstring, FILETIME> write_files;
-    for (const auto& entry : std::filesystem::directory_iterator(cache_dir))
-    {
+	std::unordered_map<std::wstring, FILETIME> read_files;
+	std::unordered_map<std::wstring, FILETIME> write_files;
+	for (const auto& entry : std::filesystem::directory_iterator(cache_dir))
+	{
 		if (entry.path().extension() == L".tlog")
 		{
 			DebugPrint("Processing file: %ls\n", entry.path().c_str());
@@ -267,7 +267,7 @@ void BuildCacheFile(const char* cache_dir)
 			// delete the .tlog file
 			DeleteFile(entry.path().c_str());
 		}
-    }
+	}
 
 	// Output read files
 	{
@@ -277,14 +277,14 @@ void BuildCacheFile(const char* cache_dir)
 		for (auto& f : read_files)
 		{
 			read_file << f.first << L"\n";
-			read_file << std::to_wstring(*((uint64_t*) &f.second)) << L"\n";
+			read_file << std::to_wstring(*((uint64_t*)&f.second)) << L"\n";
 		}
 	}
 
 	// Output write files
 	{
 		std::string write_file_path = cache_dir;
-        write_file_path += "\\writefiles.txt";
+		write_file_path += "\\writefiles.txt";
 		std::wofstream read_file(write_file_path);
 		for (auto& f : write_files)
 		{
@@ -312,7 +312,7 @@ struct ScopedTimer
 };
 
 // Return the arg and its index in GetCommandLine
-std::pair<std::string,int> GetCommandToRun(size_t arg_idx)
+std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
 {
 	// We use GetCommandLineA here rather than params passed to main because argv has the quotes stripped.
 	LPSTR pCommandLine = GetCommandLineA();
@@ -320,10 +320,10 @@ std::pair<std::string,int> GetCommandToRun(size_t arg_idx)
 	size_t length = strlen(pCommandLine);
 
 	// Find where the arg_idx begins
-	size_t arg_start = 0;
+	int arg_start = 0;
 	int arg_cnt = 0;
 	int quote_cnt = 0;
-	for (size_t i = 0; i < length; i++)
+	for (int i = 0; i < length; i++)
 	{
 		if (pCommandLine[i] == '\"')
 		{
@@ -346,21 +346,22 @@ int main(int argc, char* argv[])
 {
 	ScopedTimer timer;
 	const char* tracker_path = "Tracker.exe";
-    if (argc > 1)
-    {
+	if (argc > 1)
+	{
 		// We use GetCommandLineA here rather than params passed to main because argv has the quotes stripped.
 		std::string command_line = GetCommandLineA() + GetCommandToRun(2).second;
 
 		// Generate unique hash from command to run.
-        const std::hash<std::string> string_hasher;
-        const size_t command_line_hash = string_hasher(command_line);
+		const std::hash<std::string> string_hasher;
+		const size_t command_line_hash = string_hasher(command_line);
 
 		// Build a unique folder to put cache files based on the command line
-        const std::string cache_dir = GetTempDir(argv[1], command_line_hash);
-        if (CheckIfOutOfDate(cache_dir.c_str()))
-        {
-            const std::string cmd = BuildTrackerCommandLine(argv[0], cache_dir.c_str(), command_line.c_str());
-            const DWORD ret = RunCommand((char*)cmd.c_str());
+		const std::string cache_dir = GetTempDir(argv[1], command_line_hash);
+		if (CheckIfOutOfDate(cache_dir.c_str()))
+		{
+			ClearCacheDir(cache_dir.c_str()); // Clear any cache files from previous run
+			const std::string cmd = BuildTrackerCommandLine(argv[0], cache_dir.c_str(), command_line.c_str());
+			const DWORD ret = RunCommand((char*)cmd.c_str());
 			if (ret == 0)
 			{
 				// Process succeeded, process and write cache files.
@@ -372,11 +373,11 @@ int main(int argc, char* argv[])
 				ClearCacheDir(cache_dir.c_str());
 			}
 			return ret;
-        }
+		}
 		// We are up to date!
 		DebugPrint("Command is up to date. Exiting.\n");
 		return 0;
-    }
+	}
 	PrintUsage();
 	return -1;
 }
