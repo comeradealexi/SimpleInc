@@ -1,18 +1,18 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _CRT_SECURE_NO_WARNINGS
-#include <windows.h>
-#include <string>
 #include <algorithm>
-#include <sstream>
-#include <filesystem>
-#include <unordered_map>
-#include <iostream>
-#include <cstring>
-#include <fstream>
-#include <locale>
-#include <codecvt>
 #include <chrono>
+#include <codecvt>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <locale>
 #include <shlwapi.h>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <windows.h>
 
 #ifdef _DEBUG
 #define DebugPrint(...) printf(__VA_ARGS__)
@@ -101,6 +101,7 @@ bool CheckIfOutOfDate(const char* cache_dir)
 					uint64_t filetime_now_u64 = *(uint64_t*)&filetime_now;
 					if (filetime_now_u64 != filetime_before_u64)
 					{
+						DebugPrint("File modified since last run: %s\n", path.c_str());
 						return true;
 					}
 				}
@@ -300,16 +301,18 @@ void PrintUsage()
 	printf("Arg 1: Command Line (Don't do anything special here, just pass it as if you were going to call it normally)");
 }
 
+#ifdef USE_TIMER
 struct ScopedTimer
 {
 	using Clock = std::chrono::high_resolution_clock;
 	~ScopedTimer()
 	{
 		float time_milliseconds = std::chrono::duration<float>(Clock::now() - start_time).count() * 1000.0f;
-		DebugPrint("Time: %0.1fms\n", time_milliseconds);
+		printf("Time: %0.1fms\n", time_milliseconds);
 	}
 	const Clock::time_point start_time = Clock::now();
 };
+#endif
 
 // Return the arg and its index in GetCommandLine
 std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
@@ -344,7 +347,9 @@ std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
 
 int main(int argc, char* argv[])
 {
+#ifdef USE_TIMER
 	ScopedTimer timer;
+#endif
 	const char* tracker_path = "Tracker.exe";
 	if (argc > 1)
 	{
@@ -360,7 +365,7 @@ int main(int argc, char* argv[])
 		if (CheckIfOutOfDate(cache_dir.c_str()))
 		{
 			ClearCacheDir(cache_dir.c_str()); // Clear any cache files from previous run
-			const std::string cmd = BuildTrackerCommandLine(argv[0], cache_dir.c_str(), command_line.c_str());
+			const std::string cmd = BuildTrackerCommandLine(tracker_path, cache_dir.c_str(), command_line.c_str());
 			const DWORD ret = RunCommand((char*)cmd.c_str());
 			if (ret == 0)
 			{
