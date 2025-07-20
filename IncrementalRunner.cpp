@@ -86,9 +86,9 @@ bool CheckIfOutOfDate(const char* cache_dir)
 
 	// Process read files - Check modified times have not changed
 	{
-		std::string chache_read_file = cache_dir;
-		chache_read_file += "\\readfiles.txt";
-		std::ifstream readfiles(chache_read_file);
+		std::string cache_read_file = cache_dir;
+		cache_read_file += "\\readfiles.txt";
+		std::ifstream readfiles(cache_read_file);
 		if (readfiles.good())
 		{
 			std::string path, filetime;
@@ -106,6 +106,11 @@ bool CheckIfOutOfDate(const char* cache_dir)
 					}
 				}
 			}
+		}
+		else
+		{
+			DebugPrint("Could not open readfiles.txt\n");
+			return false;
 		}
 	}
 
@@ -127,6 +132,11 @@ bool CheckIfOutOfDate(const char* cache_dir)
 					}
 				}
 			}
+		}
+		else
+		{
+			DebugPrint("Could not open writefiles.txt\n");
+			return false;
 		}
 	}
 	return false;
@@ -334,6 +344,13 @@ std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
 		}
 		else if (pCommandLine[i] == ' ' && (quote_cnt % 2) == 0)
 		{
+			//Skip ahead any additional spaces in the command line
+			while (pCommandLine[i] == ' ')
+			{
+				i++;
+			}
+			i--;
+
 			if (arg_cnt == arg_idx)
 			{
 				return { std::string(&(pCommandLine[arg_start]), i - arg_start), arg_start };
