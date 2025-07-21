@@ -307,8 +307,9 @@ void BuildCacheFile(const char* cache_dir)
 
 void PrintUsage()
 {
-	printf("Arg 0: Cache Directory");
-	printf("Arg 1: Command Line (Don't do anything special here, just pass it as if you were going to call it normally)");
+	printf("Arg 0: Tracker.exe Directory (e.g. $(MSBuildBinPath) from Visual Studio)");
+	printf("Arg 1: Cache Directory");
+	printf("Arg 2: Command Line (Don't do anything special here, just pass it as if you were going to call it normally)");
 }
 
 #ifdef USE_TIMER
@@ -367,22 +368,23 @@ int main(int argc, char* argv[])
 #ifdef USE_TIMER
 	ScopedTimer timer;
 #endif
-	const char* tracker_path = "Tracker.exe";
-	if (argc > 1)
+	std::string tracker_path(argv[1]);
+	tracker_path += "\\Tracker.exe";
+	if (argc > 2)
 	{
 		// We use GetCommandLineA here rather than params passed to main because argv has the quotes stripped.
-		std::string command_line = GetCommandLineA() + GetCommandToRun(2).second;
+		std::string command_line = GetCommandLineA() + GetCommandToRun(3).second;
 
 		// Generate unique hash from command to run.
 		const std::hash<std::string> string_hasher;
 		const size_t command_line_hash = string_hasher(command_line);
 
 		// Build a unique folder to put cache files based on the command line
-		const std::string cache_dir = GetTempDir(argv[1], command_line_hash);
+		const std::string cache_dir = GetTempDir(argv[2], command_line_hash);
 		if (CheckIfOutOfDate(cache_dir.c_str()))
 		{
 			ClearCacheDir(cache_dir.c_str()); // Clear any cache files from previous run
-			const std::string cmd = BuildTrackerCommandLine(tracker_path, cache_dir.c_str(), command_line.c_str());
+			const std::string cmd = BuildTrackerCommandLine(tracker_path.c_str(), cache_dir.c_str(), command_line.c_str());
 			const DWORD ret = RunCommand((char*)cmd.c_str());
 			if (ret == 0)
 			{
