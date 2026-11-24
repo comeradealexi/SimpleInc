@@ -45,27 +45,33 @@ function Invoke-FromCwd {
 }
 
 $codeA = Invoke-FromCwd -Cwd $dirA -AbsRead (Join-Path $dirA 'rel-in.txt') -AbsWrite (Join-Path $dirA $relOut)
-Assert-equal 0 $codeA 'projA run'
+Assert-Equal 0 $codeA 'projA run'
 Assert-True (Test-Path (Join-Path $dirA $relOut)) 'projA wrote relative output'
 $dirsAfterA = @(Get-CacheHashDirs $ctx.CacheRoot)
-Assert-equal 1 $dirsAfterA.Count 'one hash after first cwd'
+Assert-Equal 1 $dirsAfterA.Count 'one hash after first cwd'
 
-# Same command text from projB — SHARES the cache key. With FakeTracker recording B's absolute
-# paths on rebuild only when dirty: if A is up-to-date, B may incorrectly SKIP.
+# Same command text from projB — SHARES the cache key. Document the false up-to-date:
+# FakeTracker recorded A's absolute paths; B's inputs are different files but the command
+# string matches, so SimpleInc skips and projB must NOT get a fresh relative output.
+$runsAfterA = Get-FakeRunCount $ctx.RunLog
 $codeB = Invoke-FromCwd -Cwd $dirB -AbsRead (Join-Path $dirB 'rel-in.txt') -AbsWrite (Join-Path $dirB $relOut)
-Assert-equal 0 $codeB 'projB run exits 0'
+Assert-Equal 0 $codeB 'projB run exits 0'
 $dirsAfterB = @(Get-CacheHashDirs $ctx.CacheRoot)
-Assert-equal 1 $dirsAfterB.Count `
+Assert-Equal 1 $dirsAfterB.Count `
     'identical command strings share one hash dir regardless of cwd (documented limitation)'
+Assert-Equal $runsAfterA (Get-FakeRunCount $ctx.RunLog) `
+    'projB must share projA cache key and skip Tracker (documented cwd limitation)'
+Assert-True (-not (Test-Path (Join-Path $dirB $relOut))) `
+    'projB relative output must be absent when cwd is not part of the cache key'
 
 # Env var change alone does not alter the cache key either
 $env:SIMPLEINC_TEST_ENV_MARKER = 'one'
-$codeE1 = Invoke-FromCwd -Cwd $dirA -AbsRead (Join-Path $dirA 'rel-in.txt') -AbsWrite (Join-Path $dirA $relOut)
+$null = Invoke-FromCwd -Cwd $dirA -AbsRead (Join-Path $dirA 'rel-in.txt') -AbsWrite (Join-Path $dirA $relOut)
 $env:SIMPLEINC_TEST_ENV_MARKER = 'two'
 $runsBefore = Get-FakeRunCount $ctx.RunLog
-$codeE2 = Invoke-FromCwd -Cwd $dirA -AbsRead (Join-Path $dirA 'rel-in.txt') -AbsWrite (Join-Path $dirA $relOut)
+$null = Invoke-FromCwd -Cwd $dirA -AbsRead (Join-Path $dirA 'rel-in.txt') -AbsWrite (Join-Path $dirA $relOut)
 Remove-Item Env:SIMPLEINC_TEST_ENV_MARKER -ErrorAction SilentlyContinue
-Assert-equal $runsBefore (Get-FakeRunCount $ctx.RunLog) `
+Assert-Equal $runsBefore (Get-FakeRunCount $ctx.RunLog) `
     'changing an unrelated env var must not by itself bust the cache key'
 
 Write-ValLog 'Test-CwdAndEnv passed (documents cwd/env not in cache key)'

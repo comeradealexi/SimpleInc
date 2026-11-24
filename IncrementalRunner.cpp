@@ -70,24 +70,42 @@ std::wstring Utf8ToWide(const std::string& utf8)
 	return wide;
 }
 
-FILETIME GetFileModifiedTime(LPCWSTR lpFileName)
+// Win32 CreateFileW rejects paths >= MAX_PATH unless given the \\?\ / \\?\UNC\ form.
+std::wstring ToExtendedPath(const std::wstring& path)
 {
-	HANDLE hFile;
-	FILETIME CreationTime;
-	FILETIME LastAccessTime;
-	FILETIME LastWriteTime;
-
-	hFile = CreateFileW(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hFile != INVALID_HANDLE_VALUE)
+	if (path.empty() || path.rfind(L"\\\\?\\", 0) == 0)
 	{
-		if (GetFileTime(hFile, &CreationTime, &LastAccessTime, &LastWriteTime))
-		{
-			CloseHandle(hFile);
-			return LastWriteTime;
-		}
-		CloseHandle(hFile);
+		return path;
 	}
-	return {};
+	if (path.rfind(L"\\\\", 0) == 0)
+	{
+		// \\server\share\... → \\?\UNC\server\share\...
+		return L"\\\\?\\UNC\\" + path.substr(2);
+	}
+	return L"\\\\?\\" + path;
+}
+
+// Returns false if the path cannot be opened (missing, ACL, sharing). Callers must
+// treat failure as dirty — never equate "unreadable" with FILETIME zero.
+bool GetFileModifiedTime(LPCWSTR lpFileName, FILETIME* out_ft)
+{
+	const std::wstring extended = ToExtendedPath(lpFileName);
+	HANDLE hFile = CreateFileW(extended.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE)
+	{
+		return false;
+	}
+	FILETIME CreationTime{};
+	FILETIME LastAccessTime{};
+	FILETIME LastWriteTime{};
+	const BOOL ok = GetFileTime(hFile, &CreationTime, &LastAccessTime, &LastWriteTime);
+	CloseHandle(hFile);
+	if (!ok)
+	{
+		return false;
+	}
+	*out_ft = LastWriteTime;
+	return true;
 }
 
 std::wstring GetTempDir(const std::wstring& temp_dir, size_t hash)
@@ -156,7 +174,12 @@ bool CheckIfOutOfDate(const std::wstring& cache_dir)
 			}
 
 			const std::wstring wide_path = Utf8ToWide(path);
-			FILETIME filetime_now = GetFileModifiedTime(wide_path.c_str());
+			FILETIME filetime_now{};
+			if (!GetFileModifiedTime(wide_path.c_str(), &filetime_now))
+			{
+				DebugPrint("Missing/unreadable since last run (%s): %s\n", label, path.c_str());
+				return true;
+			}
 			const uint64_t filetime_now_u64 = FileTimeToUInt64(filetime_now);
 			if (filetime_now_u64 != filetime_before_u64)
 			{
@@ -229,24 +252,30 @@ DWORD RunCommand(std::wstring& cmd)
 }
 
 // Tracker.exe writes UTF-16 text with an optional BOM. Accept CRLF and LF;
-// include a final line that lacks a trailing newline.
+// include a final line that lacks a trailing newline. Returns false on I/O failure
+// (caller must not publish a complete cache after a failed tlog read).
 template <typename LAMBDA_PER_LINE>
-void ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambda)
+bool ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambda)
 {
 	static_assert(sizeof(wchar_t) == 2);
 	FILE* f = _wfopen(file_path.c_str(), L"rb");
 	if (!f)
 	{
 		DebugPrint("Failed to open file for reading: %s\n", WideToUtf8(file_path).c_str());
-		return;
+		return false;
 	}
 	fseek(f, 0, SEEK_END);
 	long len = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	if (len <= 0)
+	if (len < 0)
 	{
 		fclose(f);
-		return;
+		return false;
+	}
+	if (len == 0)
+	{
+		fclose(f);
+		return true;
 	}
 	if ((len % (long)sizeof(wchar_t)) != 0)
 	{
@@ -259,7 +288,7 @@ void ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambd
 	{
 		DebugPrint("malloc failed to allocate %i bytes\n", len);
 		fclose(f);
-		return;
+		return false;
 	}
 	const size_t bytes_read = fread(data, 1, (size_t)len, f);
 	fclose(f);
@@ -267,7 +296,7 @@ void ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambd
 	{
 		DebugPrint("Short read on %s (%zu of %ld bytes)\n", WideToUtf8(file_path).c_str(), bytes_read, len);
 		free(data);
-		return;
+		return false;
 	}
 
 	long characters = len / (long)sizeof(wchar_t);
@@ -305,6 +334,7 @@ void ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambd
 		lambda(&(data[start]));
 	}
 	free(data);
+	return true;
 }
 
 void ClearCacheDir(const std::wstring& cache_dir)
@@ -374,7 +404,7 @@ bool BuildCacheFile(const std::wstring& cache_dir)
 		std::unordered_map<std::wstring, FILETIME>* map_files =
 			IsWriteTlogFilename(entry.path()) ? &write_files : &read_files;
 
-		ProcessUTF16FileByLine(entry.path().wstring(), [&](wchar_t* line)
+		if (!ProcessUTF16FileByLine(entry.path().wstring(), [&](wchar_t* line)
 			{
 				if (line[0] == L'\0')
 				{
@@ -389,11 +419,21 @@ bool BuildCacheFile(const std::wstring& cache_dir)
 				auto it = map_files->find(wstr);
 				if (it == map_files->end())
 				{
-					FILETIME ft = GetFileModifiedTime(line);
+					FILETIME ft{};
+					// Missing at stamp time → zero FILETIME; CheckIfOutOfDate treats
+					// later open failures as dirty so the entry cannot go permanently stale.
+					if (!GetFileModifiedTime(line, &ft))
+					{
+						ft = {};
+					}
 					map_files->emplace(std::move(wstr), ft);
 					DebugPrint("\t%ls\n", line);
 				}
-			});
+			}))
+		{
+			DebugPrint("Aborting cache publish after tlog read failure.\n");
+			return false;
+		}
 
 		DeleteFileW(entry.path().c_str());
 	}

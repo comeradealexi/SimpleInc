@@ -58,3 +58,8 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 `-UseRealTracker` (optional): one smoke against the real VS `Tracker.exe` if vswhere finds it.
 
 # Limitations
+
+- **Cache key** is the trailing command string only (not cwd or environment). Identical relative commands from different directories share one hash dir.
+- **Mtime only** — delete/recreate with the same `FILETIME` does not invalidate.
+- **No cross-process lock** on a hash directory; overlapping rebuilds of the same command are best-effort.
+- Requires Visual Studio / Build Tools **Tracker.exe**.

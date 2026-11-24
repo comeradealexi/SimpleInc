@@ -18,8 +18,7 @@ try {
     Write-Utf8NoBom $inFile 'deep-input'
 }
 catch {
-    Write-ValLog "Skipping deep/long path create ($($_.Exception.Message))" 'WARN'
-    return
+    throw "SKIP: deep/long path create ($($_.Exception.Message))"
 }
 
 Assert-True ($inFile.Length -gt 120) "expected a long path, got length $($inFile.Length)"

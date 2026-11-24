@@ -10,8 +10,7 @@ try {
     New-Item -ItemType Directory -Path $uniDir -Force | Out-Null
 }
 catch {
-    Write-ValLog "Skipping Unicode path creation ($($_.Exception.Message))" 'WARN'
-    return
+    throw "SKIP: Unicode path creation ($($_.Exception.Message))"
 }
 
 $inFile = Join-Path $uniDir ("input-" + [char]0x65E5 + [char]0x672C + ".txt")  # 日本
@@ -20,8 +19,7 @@ try {
     Write-Utf8NoBom $inFile 'unicode-input'
 }
 catch {
-    Write-ValLog "Skipping Unicode file write ($($_.Exception.Message))" 'WARN'
-    return
+    throw "SKIP: Unicode file write ($($_.Exception.Message))"
 }
 
 $child = "`"$($Suite.TouchFileExe)`" `"$outFile`""
@@ -37,8 +35,8 @@ $cacheDir = Get-SingleCacheDir $ctx.CacheRoot
 Assert-True (Test-CacheComplete $cacheDir) 'unicode cache complete'
 
 $reads = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8
-Assert-True ($reads[0].Contains([char]0x65E5) -or $reads[0] -like '*input*') `
-    "readfiles should retain unicode path, got: $($reads[0])"
+Assert-True ($reads[0].Contains([char]0x65E5)) `
+    "readfiles must retain Unicode (U+65E5), got: $($reads[0])"
 
 # Up-to-date skip with unicode paths
 $before = Get-FakeRunCount $ctx.RunLog
