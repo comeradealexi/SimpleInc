@@ -14,8 +14,7 @@ $envMap = @{
     SIMPLEINC_FAKE_WRITES = $outFile
 }
 
-# --- Interrupted: Tracker succeeds but writes no tlogs; BuildCacheFile still publishes empty complete cache.
-# Simulate a worse interrupt: manually create partial files without sentinel after a good run.
+# --- Interrupted: partial publish (missing sentinel / leftover .tmp) must rebuild.
 $null = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra $envMap
 $cacheDir = Get-SingleCacheDir $ctx.CacheRoot
 Assert-True (Test-CacheComplete $cacheDir) 'baseline complete'
@@ -32,7 +31,7 @@ Assert-True (Test-CacheComplete (Get-SingleCacheDir $ctx.CacheRoot)) 'rebuild co
 Assert-True (-not (Test-Path (Join-Path (Get-SingleCacheDir $ctx.CacheRoot) 'writefiles.txt.tmp'))) `
     'temp publish leftovers cleared'
 
-# --- Skip-tlogs success: FakeTracker exits 0 without tlogs → empty but complete cache; next call skips
+# --- Skip-tlogs: Tracker exits 0 with no paths → incomplete. No complete.flag, non-zero, next run retries.
 $ctx2 = New-TestContext -WorkRoot $Suite.WorkRoot -Name 'skiptlogs' `
     -SimpleIncExe $Suite.SimpleIncExe -FakeTrackerDir $Suite.FakeTrackerDir
 $out2 = Join-Path $ctx2.DataDir 'out2.txt'
@@ -42,11 +41,16 @@ $envSkip = @{
     SIMPLEINC_FAKE_WRITES     = $out2
     SIMPLEINC_FAKE_SKIP_TLOGS = '1'
 }
-$null = Invoke-SimpleInc -Ctx $ctx2 -CommandLine $child2 -EnvExtra $envSkip
-Assert-True (Test-CacheComplete (Get-SingleCacheDir $ctx2.CacheRoot)) 'skip-tlogs still publishes sentinel'
-$before = Get-FakeRunCount $ctx2.RunLog
-$null = Invoke-SimpleInc -Ctx $ctx2 -CommandLine $child2 -EnvExtra $envSkip
-Assert-equal $before (Get-FakeRunCount $ctx2.RunLog) 'empty complete cache is up to date'
+$skip1 = Invoke-SimpleInc -Ctx $ctx2 -CommandLine $child2 -EnvExtra $envSkip -AcceptExitCodes @(-1)
+Assert-ExitCode -1 $skip1.ExitCode 'zero-path Tracker result must exit non-zero'
+$skipDir = Get-SingleCacheDir $ctx2.CacheRoot
+Assert-True (-not (Test-Path (Join-Path $skipDir 'complete.flag'))) 'zero-path run must not publish complete.flag'
+Assert-True (-not (Test-Path (Join-Path $skipDir 'readfiles.txt'))) 'zero-path run must clear readfiles.txt'
+Assert-True (-not (Test-Path (Join-Path $skipDir 'writefiles.txt'))) 'zero-path run must clear writefiles.txt'
+Assert-True (Test-Path (Join-Path $skipDir 'cache.lock')) 'cache.lock stays when the stamp is cleared'
+$skip2 = Invoke-SimpleInc -Ctx $ctx2 -CommandLine $child2 -EnvExtra $envSkip -AcceptExitCodes @(-1)
+Assert-ExitCode -1 $skip2.ExitCode 'second zero-path run must retry'
+Assert-Equal 2 (Get-FakeRunCount $ctx2.RunLog) 'empty stamp must not look up to date'
 
 # --- Concurrent identical commands: cache.lock single-flights clear→run→publish.
 $ctx3 = New-TestContext -WorkRoot $Suite.WorkRoot -Name 'concurrent' `

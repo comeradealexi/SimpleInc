@@ -51,10 +51,10 @@ validation/
 | `complete.flag` / empty dir / partial publish | `Test-SentinelAndPartial.ps1` |
 | Quotes + multi-space command lines; `"` in the Tracker directory or cache root is rejected | `Test-Quotes.ps1` |
 | Unicode path UTF-8 cache round-trip | `Test-UnicodePaths.ps1` |
-| `.tlog` CRLF/LF/no final NL, dedupe, empty, `.write.` in path | `Test-TlogParsing.ps1` |
+| `.tlog` CRLF/LF/no final NL, dedupe, header-only tlogs refused, `.write.` in path | `Test-TlogParsing.ps1` |
 | Failed child / missing Tracker | `Test-FailedChild.ps1`, `Test-MissingTracker.ps1` |
 | Cache hash identity | `Test-CacheIdentity.ps1` |
-| Interrupted publish + four locked concurrent runs (one Tracker invocation, then skip) | `Test-InterruptedAndConcurrent.ps1` |
+| Interrupted publish, zero-path Tracker miss (no `complete.flag`, non-zero), four locked concurrent runs | `Test-InterruptedAndConcurrent.ps1` |
 | Large tlogs (hundreds of paths, sharded) | `Test-LargeTlog.ps1` |
 | Deep / long paths | `Test-DeepLongPaths.ps1` |
 | Same-mtime recreate pitfall | `Test-SameMtimeRecreate.ps1` |
