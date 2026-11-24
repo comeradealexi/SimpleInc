@@ -26,7 +26,7 @@ On Windows, the suite builds SimpleInc + helpers, runs every scenario under a te
 powershell -NoProfile -ExecutionPolicy Bypass -File .\validation\Run-Validation.ps1
 ```
 
-Optional: `-UseRealTracker`, `-KeepWorkRoot`, `-Filter <name>`, `-SkipBuild`. Details in `validation/README.md`.
+Optional: `-UseRealTracker`, `-KeepWorkRoot`, `-Filter <name>`, `-AllowPrebuilt` (required with `-SkipBuild`; otherwise a missing MSBuild fails the suite instead of using `Bin\Release\SimpleInc.exe`). Details in `validation/README.md`.
 
 The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 
@@ -35,7 +35,7 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 | Script | What it checks |
 | --- | --- |
 | `Test-ArgcUsage` | Too few args → usage text with newlines + non-zero exit (no crash). |
-| `Test-FreshAndUpToDate` | Cold/missing cache runs once; identical second call skips (FakeTracker not re-invoked). |
+| `Test-FreshAndUpToDate` | Cold/missing cache runs once; identical second call skips. A relative tlog path still skips (not broken by `\\?\`). |
 | `Test-DirtyInvalidation` | Rebuilds on read mtime change, write mtime/clobber, missing write, missing/corrupt/truncated cache lists. |
 | `Test-SentinelAndPartial` | Empty hash dir, missing `complete.flag`, sentinel-only, or leftover `.tmp` → never treated as up-to-date. |
 | `Test-Quotes` | Paths with spaces / nested quotes and multi-space argv survive into the child. |
@@ -44,16 +44,16 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 | `Test-FailedChild` | Non-zero child exit clears stamp; same command must re-run (no false up-to-date). |
 | `Test-MissingTracker` | Missing `Tracker.exe` → non-zero exit and no `complete.flag`. |
 | `Test-CacheIdentity` | Different commands get different hash dirs; same command reuses its dir and skips. |
-| `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; skip-tlogs still publishes sentinel; concurrent identical runs exit 0 without a false-complete stamp. |
+| `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; skip-tlogs still publishes sentinel; four overlapping identical runs exit 0, invoke Tracker once, and a later call skips. |
 | `Test-LargeTlog` | Hundreds of read/write paths via list files + sharded `.tlog`s; up-to-date skip; mid-list mtime dirty. |
 | `Test-DeepLongPaths` | Deep nested directories + long filenames survive cache round-trip and skip. |
 | `Test-SameMtimeRecreate` | Delete/recreate with identical FILETIME does **not** invalidate (documents mtime-only pitfall); real mtime bump does. |
 | `Test-PathCase` | Tracker casing preserved; NTFS case-insensitive open still up-to-date. |
-| `Test-ReadOnlyCache` | Read-only cache files must not cause a silent up-to-date skip when inputs change. |
+| `Test-ReadOnlyCache` | Read-only cache files are cleared and republished when an input changes; the next call skips. |
 | `Test-LongCommandLine` | Multi-KB command lines hash/skip correctly; tiny mutation gets a new hash dir. |
 | `Test-SharedCacheRoot` | Many distinct commands concurrent under one cache root → one complete hash dir each. |
 | `Test-CwdAndEnv` | Identical command strings share a cache key across cwd/env (documents limitation). |
-| `Test-StampRace` | Overlapping same-command rebuilds must not leave a false up-to-date stamp. |
+| `Test-StampRace` | Holding `cache.lock` blocks a dirty rebuild (Tracker does not run until release). Four overlapping cold starts and four dirty rebuilds each invoke Tracker once, then a later call skips. |
 
 `-UseRealTracker` (optional): one smoke against the real VS `Tracker.exe` if vswhere finds it.
 
@@ -61,5 +61,5 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 
 - **Cache key** is the trailing command string only (not cwd or environment). Identical relative commands from different directories share one hash dir.
 - **Mtime only** — delete/recreate with the same `FILETIME` does not invalidate.
-- **No cross-process lock** on a hash directory; overlapping rebuilds of the same command are best-effort.
+- **Per-hash-dir lock** — `cache.lock` is opened exclusively (`CreateFileW`, share mode 0) for the out-of-date check, clear, run, and publish. Identical concurrent commands single-flight. Distinct commands use different hash dirs and still run in parallel. A crashed process releases the lock when the OS closes the handle.
 - Requires Visual Studio / Build Tools **Tracker.exe**.

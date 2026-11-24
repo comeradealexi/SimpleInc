@@ -20,6 +20,7 @@
 static const wchar_t* kCompleteFlagName = L"complete.flag";
 static const wchar_t* kReadFilesName = L"readfiles.txt";
 static const wchar_t* kWriteFilesName = L"writefiles.txt";
+static const wchar_t* kLockName = L"cache.lock";
 
 //https://stackoverflow.com/questions/6218325/how-do-you-check-if-a-directory-exists-on-windows-in-c
 BOOL DirectoryExists(LPCWSTR szPath)
@@ -70,19 +71,40 @@ std::wstring Utf8ToWide(const std::string& utf8)
 	return wide;
 }
 
+static bool IsAbsoluteWinPath(const std::wstring& path)
+{
+	if (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\')
+	{
+		return true;
+	}
+	return path.size() >= 3 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/');
+}
+
 // Win32 CreateFileW rejects paths >= MAX_PATH unless given the \\?\ / \\?\UNC\ form.
+// That prefix is invalid on relative paths ("\\?\input.txt" does not open), so only
+// absolute paths are rewritten. '/' is normalized because \\?\ paths are not.
 std::wstring ToExtendedPath(const std::wstring& path)
 {
 	if (path.empty() || path.rfind(L"\\\\?\\", 0) == 0)
 	{
 		return path;
 	}
-	if (path.rfind(L"\\\\", 0) == 0)
+	if (!IsAbsoluteWinPath(path))
 	{
-		// \\server\share\... → \\?\UNC\server\share\...
-		return L"\\\\?\\UNC\\" + path.substr(2);
+		return path;
 	}
-	return L"\\\\?\\" + path;
+
+	const std::wstring prefix = (path[0] == L'\\' && path[1] == L'\\') ? L"\\\\?\\UNC\\" : L"\\\\?\\";
+	const size_t rest_begin = (path[0] == L'\\' && path[1] == L'\\') ? 2 : 0;
+	std::wstring extended;
+	extended.reserve(prefix.size() + path.size() - rest_begin);
+	extended.append(prefix);
+	for (size_t i = rest_begin; i < path.size(); i++)
+	{
+		const wchar_t ch = path[i];
+		extended.push_back(ch == L'/' ? L'\\' : ch);
+	}
+	return extended;
 }
 
 // Returns false if the path cannot be opened (missing, ACL, sharing). Callers must
@@ -337,6 +359,19 @@ bool ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambd
 	return true;
 }
 
+void ClearReadonlyAttribute(const std::wstring& path)
+{
+	const DWORD attrs = GetFileAttributesW(path.c_str());
+	if (attrs == INVALID_FILE_ATTRIBUTES)
+	{
+		return;
+	}
+	if (attrs & FILE_ATTRIBUTE_READONLY)
+	{
+		SetFileAttributesW(path.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+	}
+}
+
 void ClearCacheDir(const std::wstring& cache_dir)
 {
 	DebugPrint("Clearing cache directory %s\n", WideToUtf8(cache_dir).c_str());
@@ -348,6 +383,15 @@ void ClearCacheDir(const std::wstring& cache_dir)
 	}
 	for (const auto& entry : std::filesystem::directory_iterator(root, ec))
 	{
+		// cache.lock is held open for the duration of clear -> run -> publish.
+		if (entry.path().filename().wstring() == kLockName)
+		{
+			continue;
+		}
+		const std::wstring entry_path = entry.path().wstring();
+		// A read-only cache file otherwise survives remove_all / MoveFileEx and
+		// every later dirty rebuild exits -1 without publishing.
+		ClearReadonlyAttribute(entry_path);
 		std::filesystem::remove_all(entry.path(), ec);
 	}
 }
@@ -372,6 +416,7 @@ bool WriteUtf8FileAtomic(const std::wstring& final_path, const std::string& cont
 		}
 	}
 
+	ClearReadonlyAttribute(final_path);
 	if (!MoveFileExW(temp_path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 	{
 		DebugPrint("Failed to publish cache file %s (%lu)\n", WideToUtf8(final_path).c_str(), GetLastError());
@@ -456,6 +501,7 @@ bool BuildCacheFile(const std::wstring& cache_dir)
 	const std::wstring complete_path = JoinPath(cache_dir, kCompleteFlagName);
 
 	// Ensure a prior incomplete publish cannot leave a stale sentinel.
+	ClearReadonlyAttribute(complete_path);
 	DeleteFileW(complete_path.c_str());
 
 	if (!WriteUtf8FileAtomic(read_path, serialize_map(read_files)))
@@ -494,6 +540,68 @@ struct ScopedTimer
 	const Clock::time_point start_time = Clock::now();
 };
 #endif
+
+// Exclusive per-hash-dir lock. Held across the out-of-date check, clear, child, and
+// publish so two identical commands cannot interleave tlog deletes and stamps.
+// The file is intentionally left in the hash dir; the mutex is the open handle
+// (share mode 0), which the OS drops if this process dies.
+struct CacheDirLock
+{
+	HANDLE handle = INVALID_HANDLE_VALUE;
+
+	bool TryAcquire(const std::wstring& cache_dir)
+	{
+		const std::wstring dir_to_create = ToExtendedPath(cache_dir);
+		if (!CreateDirectoryW(dir_to_create.c_str(), NULL))
+		{
+			const DWORD err = GetLastError();
+			if (err != ERROR_ALREADY_EXISTS)
+			{
+				DebugPrint("CreateDirectory for cache lock failed (%lu)\n", err);
+				return false;
+			}
+		}
+
+		const std::wstring lock_path = ToExtendedPath(JoinPath(cache_dir, kLockName));
+		ClearReadonlyAttribute(lock_path);
+
+		for (;;)
+		{
+			handle = CreateFileW(
+				lock_path.c_str(),
+				GENERIC_READ | GENERIC_WRITE,
+				0, // exclusive
+				NULL,
+				OPEN_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL,
+				NULL);
+			if (handle != INVALID_HANDLE_VALUE)
+			{
+				return true;
+			}
+			const DWORD err = GetLastError();
+			if (err != ERROR_SHARING_VIOLATION && err != ERROR_LOCK_VIOLATION)
+			{
+				DebugPrint("CreateFile cache.lock failed (%lu)\n", err);
+				return false;
+			}
+			Sleep(25);
+		}
+	}
+
+	~CacheDirLock()
+	{
+		if (handle != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(handle);
+			handle = INVALID_HANDLE_VALUE;
+		}
+	}
+
+	CacheDirLock() = default;
+	CacheDirLock(const CacheDirLock&) = delete;
+	CacheDirLock& operator=(const CacheDirLock&) = delete;
+};
 
 // Return the arg and its index in GetCommandLineW (wchar offsets).
 std::pair<std::wstring, int> GetCommandToRun(size_t arg_idx)
@@ -557,6 +665,16 @@ int wmain(int argc, wchar_t* argv[])
 
 	// Build a unique folder to put cache files based on the command line
 	const std::wstring cache_dir = GetTempDir(argv[2], command_line_hash);
+
+	// Re-check inside the lock. A waiter that observed "dirty" before the winner
+	// published must skip instead of clearing that fresh stamp and running again.
+	CacheDirLock cache_lock;
+	if (!cache_lock.TryAcquire(cache_dir))
+	{
+		DebugPrint("Failed to acquire cache lock.\n");
+		return -1;
+	}
+
 	if (CheckIfOutOfDate(cache_dir))
 	{
 		ClearCacheDir(cache_dir); // Clear any cache files from previous run

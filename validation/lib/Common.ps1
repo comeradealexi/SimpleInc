@@ -110,28 +110,29 @@ function Build-SimpleInc {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$OutDir,
-        [switch]$SkipBuild
+        [switch]$SkipBuild,
+        [switch]$AllowPrebuilt
     )
 
     $prebuilt = Join-Path $RepoRoot 'Bin\Release\SimpleInc.exe'
     $msbuild = Find-MSBuild
 
-    if ($SkipBuild) {
-        if (-not (Test-Path $prebuilt)) {
-            throw "SkipBuild requested but prebuilt binary missing: $prebuilt"
+    # Checked-in Bin\Release is not rebuilt by this script. Using it without an
+    # explicit opt-in validates a stale binary and reports PASS.
+    if ($SkipBuild -or -not $msbuild) {
+        if (-not $AllowPrebuilt) {
+            if ($SkipBuild) {
+                throw "Refusing prebuilt $prebuilt. -SkipBuild requires -AllowPrebuilt (that binary may not match source)."
+            }
+            throw "MSBuild not found. Refusing prebuilt $prebuilt. Install Visual Studio Build Tools, or pass -AllowPrebuilt to use the checked-in binary."
         }
-        Write-ValLog "Using prebuilt $prebuilt (SkipBuild). Note: may not include latest source fixes."
+        if (-not (Test-Path $prebuilt)) {
+            throw "AllowPrebuilt requested but prebuilt binary missing: $prebuilt"
+        }
+        $why = if ($SkipBuild) { '-SkipBuild -AllowPrebuilt' } else { 'MSBuild not found and -AllowPrebuilt' }
+        Write-ValLog "Using prebuilt $prebuilt ($why). It may not match current source." 'WARN'
         Copy-Item $prebuilt (Join-Path $OutDir 'SimpleInc.exe') -Force
         return (Join-Path $OutDir 'SimpleInc.exe')
-    }
-
-    if (-not $msbuild) {
-        if (Test-Path $prebuilt) {
-            Write-ValLog "MSBuild not found; falling back to prebuilt $prebuilt" 'WARN'
-            Copy-Item $prebuilt (Join-Path $OutDir 'SimpleInc.exe') -Force
-            return (Join-Path $OutDir 'SimpleInc.exe')
-        }
-        throw 'MSBuild not found and no prebuilt SimpleInc.exe available.'
     }
 
     Write-ValLog "Building SimpleInc with $msbuild"
@@ -146,20 +147,23 @@ function Build-SimpleInc {
     }
     $built = Join-Path $OutDir 'SimpleInc.exe'
     if (-not (Test-Path $built)) {
+        # Default vcxproj output when /p:OutDir is ignored. Not Bin\Release —
+        # that tree is a checked-in binary and is only used with -AllowPrebuilt.
         $alts = @(
-            (Join-Path $RepoRoot 'Bin\Release\SimpleInc.exe'),
             (Join-Path $RepoRoot 'x64\Release\SimpleInc.exe'),
             (Join-Path $RepoRoot 'Release\SimpleInc.exe')
         )
         foreach ($alt in $alts) {
             if (Test-Path $alt) {
-                Write-ValLog "Copying build output from $alt"
+                Write-ValLog "Copying fresh build output from $alt"
                 Copy-Item $alt $built -Force
                 break
             }
         }
     }
-    Assert-True (Test-Path $built) "SimpleInc.exe not produced at $built"
+    if (-not (Test-Path $built)) {
+        throw "SimpleInc.exe was not produced at $built. Refusing Bin\Release\SimpleInc.exe without -AllowPrebuilt."
+    }
     return [string]$built
 }
 
@@ -236,7 +240,8 @@ function Invoke-SimpleInc {
         [Parameter(Mandatory)]$Ctx,
         [Parameter(Mandatory)][string]$CommandLine,
         [hashtable]$EnvExtra = @{},
-        [int[]]$AcceptExitCodes = @(0)
+        [int[]]$AcceptExitCodes = @(0),
+        [string]$WorkingDirectory = ''
     )
 
     $prev = @{}
@@ -257,6 +262,9 @@ function Invoke-SimpleInc {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $Ctx.SimpleInc
         $psi.Arguments = "`"$($Ctx.TrackerDir)`" `"$($Ctx.CacheRoot)`" $CommandLine"
+        if ($WorkingDirectory) {
+            $psi.WorkingDirectory = $WorkingDirectory
+        }
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -283,6 +291,54 @@ function Invoke-SimpleInc {
             [Environment]::SetEnvironmentVariable($k, $prev[$k], 'Process')
         }
     }
+}
+
+function Invoke-SimpleIncConcurrent {
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [Parameter(Mandatory)][string]$Arguments,
+        [Parameter(Mandatory)][hashtable]$EnvPairs,
+        [Parameter(Mandatory)][int]$Count
+    )
+
+    $jobs = 1..$Count | ForEach-Object {
+        Start-Job -ScriptBlock {
+            param($JobExe, $JobArguments, $JobEnv)
+            foreach ($k in $JobEnv.Keys) {
+                [Environment]::SetEnvironmentVariable($k, [string]$JobEnv[$k], 'Process')
+            }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $JobExe
+            $psi.Arguments = $JobArguments
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $null = $p.StandardOutput.ReadToEnd()
+            $null = $p.StandardError.ReadToEnd()
+            $p.WaitForExit()
+            return [int]$p.ExitCode
+        } -ArgumentList $Exe, $Arguments, $EnvPairs
+    }
+
+    $codes = @($jobs | Wait-Job | Receive-Job)
+    $jobs | Remove-Job -Force
+    return $codes
+}
+
+function Get-CachedFileTime {
+    param(
+        [Parameter(Mandatory)][string]$CacheDir,
+        [Parameter(Mandatory)][string]$ListName,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $lines = @(Get-Content (Join-Path $CacheDir $ListName) -Encoding UTF8)
+    for ($i = 0; $i -lt ($lines.Count - 1); $i += 2) {
+        if ($lines[$i] -eq $Path) {
+            return [uint64]$lines[$i + 1]
+        }
+    }
+    throw "Path not found in ${ListName}: $Path"
 }
 
 function Get-CacheHashDirs {

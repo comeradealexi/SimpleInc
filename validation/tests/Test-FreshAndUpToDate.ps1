@@ -26,4 +26,24 @@ $r2 = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra $envMap
 Assert-ExitCode 0 $r2.ExitCode 'second run should succeed (skip)'
 Assert-Equal 1 (Get-FakeRunCount $ctx.RunLog) 'FakeTracker must NOT re-run when up to date'
 
+# Relative tlog paths must still match. Prefixing them with \\?\ makes CreateFileW
+# fail and the command looks permanently dirty.
+$relRoot = Join-Path $ctx.DataDir 'relcase'
+New-Item -ItemType Directory -Path $relRoot -Force | Out-Null
+Write-Utf8NoBom (Join-Path $relRoot 'input.txt') 'rel-input'
+$relOut = Join-Path $relRoot 'output.txt'
+$relChild = "`"$($Suite.TouchFileExe)`" `"$relOut`""
+$relEnv = @{
+    SIMPLEINC_FAKE_READS  = 'input.txt'
+    SIMPLEINC_FAKE_WRITES = 'output.txt'
+}
+if (Test-Path $ctx.RunLog) { Remove-Item $ctx.RunLog -Force }
+$rr1 = Invoke-SimpleInc -Ctx $ctx -CommandLine $relChild -EnvExtra $relEnv -WorkingDirectory $relRoot
+Assert-ExitCode 0 $rr1.ExitCode 'relative-dep first run'
+Assert-Equal 1 (Get-FakeRunCount $ctx.RunLog) 'relative-dep cold run invokes FakeTracker'
+Assert-True (Test-Path $relOut) 'relative-dep child wrote the absolute output'
+$rr2 = Invoke-SimpleInc -Ctx $ctx -CommandLine $relChild -EnvExtra $relEnv -WorkingDirectory $relRoot
+Assert-ExitCode 0 $rr2.ExitCode 'relative-dep second run'
+Assert-Equal 1 (Get-FakeRunCount $ctx.RunLog) 'relative dependency path must skip when unchanged'
+
 Write-ValLog 'Test-FreshAndUpToDate passed'
