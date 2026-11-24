@@ -1,4 +1,4 @@
-# CreateProcess failure when Tracker.exe is missing → non-zero, no complete stamp
+﻿# CreateProcess failure when Tracker.exe is missing → non-zero, no complete stamp
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -21,8 +21,8 @@ $ctx = [pscustomobject]@{
 
 $outFile = Join-Path $ctx.DataDir 'out.txt'
 $child = "`"$($Suite.TouchFileExe)`" `"$outFile`""
-$r = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra @{} -AcceptExitCodes @(-1, 4294967295)
-# main returns -1 from CreateProcess failure path (DWORD -1)
+# CreateProcess failure returns DWORD(-1) which Process.ExitCode surfaces as signed -1
+$r = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra @{} -AcceptExitCodes @(-1)
 Assert-True ($r.ExitCode -ne 0) 'missing Tracker must not exit 0'
 
 $dirs = @(Get-CacheHashDirs $ctx.CacheRoot)

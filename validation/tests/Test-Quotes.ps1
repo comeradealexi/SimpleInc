@@ -1,4 +1,4 @@
-# Quote-preserving command lines with spaces / nested quotes
+﻿# Quote-preserving command lines with spaces / nested quotes
 param($Suite)
 
 Clear-EnvFakeKnobs

@@ -1,4 +1,4 @@
-# Very long trailing command line (stress GetCommandLine / hash / CreateProcess path)
+﻿# Very long trailing command line (stress GetCommandLine / hash / CreateProcess path)
 param($Suite)
 
 Clear-EnvFakeKnobs

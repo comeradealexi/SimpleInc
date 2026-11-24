@@ -1,4 +1,4 @@
-# Different commands → different hash dirs; same command → same dir
+﻿# Different commands → different hash dirs; same command → same dir
 param($Suite)
 
 Clear-EnvFakeKnobs

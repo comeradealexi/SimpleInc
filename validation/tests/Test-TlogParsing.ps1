@@ -1,4 +1,4 @@
-# .tlog edge cases: newlines, classification by filename, empty, duplicates
+﻿# .tlog edge cases: newlines, classification by filename, empty, duplicates
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -42,16 +42,15 @@ function Run-TlogScenario {
 
     $null = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra $envMap
     $cacheDir = Get-SingleCacheDir $ctx.CacheRoot
-    Assert-True (Test-CacheComplete $cacheDir) "$Name: cache complete"
+    Assert-True (Test-CacheComplete $cacheDir) "${Name}: cache complete"
 
     if ($AfterFirst) {
         & $AfterFirst $ctx $cacheDir $inFile $outFile
     }
-    return $ctx
 }
 
 # CRLF (default)
-Run-TlogScenario -Name 'tlog-crlf' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'crlf' } -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-crlf' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'crlf' } -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     $reads = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8
     Assert-True ($reads -contains $inFile) 'CRLF tlog should produce read entry'
@@ -60,14 +59,14 @@ Run-TlogScenario -Name 'tlog-crlf' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'crlf' 
 }
 
 # LF-only
-Run-TlogScenario -Name 'tlog-lf' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'lf' } -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-lf' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'lf' } -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     $reads = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8
     Assert-True ($reads -contains $inFile) 'LF tlog should produce read entry'
 }
 
 # Final line without trailing newline
-Run-TlogScenario -Name 'tlog-nonewline' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'none' } -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-nonewline' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'none' } -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     $reads = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8
     Assert-True ($reads -contains $inFile) 'final line without newline must still be parsed'
@@ -76,7 +75,7 @@ Run-TlogScenario -Name 'tlog-nonewline' -EnvExtra @{ SIMPLEINC_FAKE_NEWLINE = 'n
 }
 
 # Duplicate paths in tlog → single cache entry
-Run-TlogScenario -Name 'tlog-dup' -EnvExtra @{ SIMPLEINC_FAKE_DUP_PATHS = '1' } -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-dup' -EnvExtra @{ SIMPLEINC_FAKE_DUP_PATHS = '1' } -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     $reads = @(Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8 | Where-Object { $_ -eq $inFile })
     Assert-Equal 1 $reads.Count 'duplicate tlog paths should dedupe to one read entry'
@@ -86,7 +85,7 @@ Run-TlogScenario -Name 'tlog-dup' -EnvExtra @{ SIMPLEINC_FAKE_DUP_PATHS = '1' } 
 }
 
 # Empty / header-only tlogs → empty maps but still complete
-Run-TlogScenario -Name 'tlog-empty' -EnvExtra @{ SIMPLEINC_FAKE_EMPTY_TLOG = '1' } -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-empty' -EnvExtra @{ SIMPLEINC_FAKE_EMPTY_TLOG = '1' } -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     $readText = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Raw -ErrorAction SilentlyContinue
     $writeText = Get-Content (Join-Path $cacheDir 'writefiles.txt') -Raw -ErrorAction SilentlyContinue
@@ -104,7 +103,7 @@ Run-TlogScenario -Name 'tlog-empty' -EnvExtra @{ SIMPLEINC_FAKE_EMPTY_TLOG = '1'
 }
 
 # Classification by filename — cache root contains ".write." substring
-Run-TlogScenario -Name 'tlog-classify-path' -CacheRootName 'cache.write.root' -EnvExtra @{} -AfterFirst {
+$null = Run-TlogScenario -Name 'tlog-classify-path' -CacheRootName 'cache.write.root' -EnvExtra @{} -AfterFirst {
     param($ctx, $cacheDir, $inFile, $outFile)
     Assert-True ($ctx.CacheRoot -match '\.write\.') 'cache root should contain .write. for this scenario'
     $reads = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Encoding UTF8

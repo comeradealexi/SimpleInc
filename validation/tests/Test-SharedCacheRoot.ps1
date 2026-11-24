@@ -1,4 +1,4 @@
-# Many commands share one cache root; concurrent distinct commands must not clobber each other
+﻿# Many commands share one cache root; concurrent distinct commands must not clobber each other
 param($Suite)
 
 Clear-EnvFakeKnobs

@@ -1,4 +1,4 @@
-# Delete + recreate with identical FILETIME: mtime-only cache does NOT rebuild (documents pitfall)
+﻿# Delete + recreate with identical FILETIME: mtime-only cache does NOT rebuild (documents pitfall)
 param($Suite)
 
 Clear-EnvFakeKnobs

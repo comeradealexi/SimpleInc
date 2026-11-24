@@ -1,4 +1,4 @@
-# At-scale: many tracked files + sharded tlogs → build cache, skip, then one mtime dirty
+﻿# At-scale: many tracked files + sharded tlogs → build cache, skip, then one mtime dirty
 param($Suite)
 
 Clear-EnvFakeKnobs

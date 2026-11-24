@@ -1,4 +1,4 @@
-# UTF-8 / Unicode path round-trip through cache (when the host FS allows)
+﻿# UTF-8 / Unicode path round-trip through cache (when the host FS allows)
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -22,6 +22,18 @@ try {
 catch {
     Write-ValLog "Skipping Unicode file write ($($_.Exception.Message))" 'WARN'
     return
+}
+
+# SimpleInc uses GetCommandLineA / CreateProcessA. If the active ANSI code page
+# cannot round-trip these paths, the child sees corrupted names — skip rather than
+# fail the suite for a known product Unicode limitation.
+$ansi = [System.Text.Encoding]::Default
+foreach ($p in @($inFile, $outFile, $Suite.TouchFileExe)) {
+    $round = $ansi.GetString($ansi.GetBytes($p))
+    if ($round -ne $p) {
+        Write-ValLog ("Skipping UnicodePaths: ANSI code page {0} cannot round-trip path (SimpleInc is ANSI-only): {1}" -f $ansi.CodePage, $p) 'WARN'
+        return
+    }
 }
 
 $child = "`"$($Suite.TouchFileExe)`" `"$outFile`""

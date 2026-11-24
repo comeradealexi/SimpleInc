@@ -1,4 +1,4 @@
-# complete.flag / partial publish must never look up-to-date
+﻿# complete.flag / partial publish must never look up-to-date
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -22,8 +22,13 @@ function Invoke-AndCount {
 }
 
 # Empty cache directory (no sentinel) → dirty
-New-Item -ItemType Directory -Path (Join-Path $ctx.CacheRoot '12345') -Force | Out-Null
+$decoy = Join-Path $ctx.CacheRoot '12345'
+New-Item -ItemType Directory -Path $decoy -Force | Out-Null
 Invoke-AndCount 1
+# Real command hashes to a different dir than the decoy; drop the decoy so later
+# Get-SingleCacheDir assertions stay unambiguous.
+Assert-True (-not (Test-CacheComplete $decoy)) 'decoy empty dir must not look complete'
+Remove-Item $decoy -Recurse -Force
 $cacheDir = Get-SingleCacheDir $ctx.CacheRoot
 Assert-True (Test-CacheComplete $cacheDir) 'publish should create sentinel'
 

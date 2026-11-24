@@ -1,4 +1,4 @@
-# Deep directories + long filenames (stay under classic MAX_PATH when possible)
+﻿# Deep directories + long filenames (stay under classic MAX_PATH when possible)
 param($Suite)
 
 Clear-EnvFakeKnobs

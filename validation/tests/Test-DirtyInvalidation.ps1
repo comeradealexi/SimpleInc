@@ -1,4 +1,4 @@
-# Read/write mtime changes, missing write, corrupt/missing cache files → dirty
+﻿# Read/write mtime changes, missing write, corrupt/missing cache files → dirty
 param($Suite)
 
 Clear-EnvFakeKnobs

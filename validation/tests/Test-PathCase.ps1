@@ -1,4 +1,4 @@
-# Windows path case: cache stores exact Tracker casing; lookup uses that string
+﻿# Windows path case: cache stores exact Tracker casing; lookup uses that string
 param($Suite)
 
 Clear-EnvFakeKnobs

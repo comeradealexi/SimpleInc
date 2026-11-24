@@ -1,4 +1,4 @@
-# Shared helpers for SimpleInc validation suite.
+﻿# Shared helpers for SimpleInc validation suite.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -136,9 +136,12 @@ function Build-SimpleInc {
 
     Write-ValLog "Building SimpleInc with $msbuild"
     $sln = Join-Path $RepoRoot 'SimpleInc.sln'
-    & $msbuild $sln /nologo /v:m /t:Rebuild /p:Configuration=Release /p:Platform=x64 `
-        /p:OutDir="$OutDir\" /p:IntDir="$OutDir\obj\"
+    # Capture MSBuild stdout/stderr so it does not become part of this function's
+    # return value (PowerShell would otherwise make SimpleIncExe an Object[]).
+    $msbuildOutput = & $msbuild $sln /nologo /v:m /t:Rebuild /p:Configuration=Release /p:Platform=x64 `
+        /p:OutDir="$OutDir\" /p:IntDir="$OutDir\obj\" 2>&1
     if ($LASTEXITCODE -ne 0) {
+        $msbuildOutput | ForEach-Object { Write-ValLog "$_" 'ERROR' }
         throw "MSBuild failed with exit $LASTEXITCODE"
     }
     $built = Join-Path $OutDir 'SimpleInc.exe'
@@ -157,7 +160,7 @@ function Build-SimpleInc {
         }
     }
     Assert-True (Test-Path $built) "SimpleInc.exe not produced at $built"
-    return $built
+    return [string]$built
 }
 
 function Build-HelperTools {
@@ -179,9 +182,10 @@ function Build-HelperTools {
     foreach ($s in $sources) {
         $src = Join-Path $ToolsSrcDir $s.Src
         $out = Join-Path $OutDir ($s.Name + '.exe')
-        Write-ValLog "Compiling $($s.Name) → $out"
-        & $csc /nologo /optimize+ /target:exe /out:$out $src
+        Write-ValLog "Compiling $($s.Name) -> $out"
+        $cscOutput = & $csc /nologo /optimize+ /target:exe /out:$out $src 2>&1
         if ($LASTEXITCODE -ne 0) {
+            $cscOutput | ForEach-Object { Write-ValLog "$_" 'ERROR' }
             throw "csc failed for $($s.Name) with exit $LASTEXITCODE"
         }
         Assert-True (Test-Path $out) "Missing $out"
@@ -283,15 +287,24 @@ function Invoke-SimpleInc {
 
 function Get-CacheHashDirs {
     param([string]$CacheRoot)
-    if (-not (Test-Path $CacheRoot)) { return @() }
-    return @(Get-ChildItem $CacheRoot -Directory | Select-Object -ExpandProperty FullName)
+    # Emit zero-or-more path strings on the pipeline. Callers must wrap with @()
+    # so a single directory is still an Object[] (StrictMode: [string] has no .Count).
+    if (-not (Test-Path $CacheRoot)) {
+        return
+    }
+    Get-ChildItem $CacheRoot -Directory | Select-Object -ExpandProperty FullName
 }
 
 function Get-SingleCacheDir {
     param([string]$CacheRoot)
-    $dirs = Get-CacheHashDirs $CacheRoot
+    $dirs = @(Get-CacheHashDirs $CacheRoot)
     Assert-True ($dirs.Count -eq 1) "Expected exactly one cache hash dir under $CacheRoot (got $($dirs.Count))"
-    return $dirs[0]
+    return [string]$dirs[0]
+}
+
+function Get-CompleteCacheDirs {
+    param([string]$CacheRoot)
+    @(Get-CacheHashDirs $CacheRoot) | Where-Object { Test-CacheComplete $_ }
 }
 
 function Test-CacheComplete {

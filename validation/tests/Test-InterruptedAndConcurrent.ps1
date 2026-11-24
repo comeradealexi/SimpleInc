@@ -1,4 +1,4 @@
-# Interrupted publish + best-effort concurrent identical commands
+﻿# Interrupted publish + best-effort concurrent identical commands
 param($Suite)
 
 Clear-EnvFakeKnobs

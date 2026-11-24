@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Single entry point for the SimpleInc validation suite (Windows).
 
@@ -70,12 +70,12 @@ function Write-ResultTable {
             default { 'Gray' }
         }
         $name = $row.Name
-        if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 1) + '…' }
+        if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 1) + '...' }
         Write-Host ("  {0,-$nameWidth}  " -f $name) -NoNewline
         Write-Host ("{0,-6}" -f $row.Status) -ForegroundColor $color -NoNewline
         Write-Host ("  {0,10}" -f (Format-DurationMs $row.Ms))
         if ($row.Status -eq 'FAIL' -and $row.Detail) {
-            Write-Host ("           ↳ {0}" -f $row.Detail) -ForegroundColor Red
+            Write-Host ("           -> {0}" -f $row.Detail) -ForegroundColor Red
         }
     }
 }
@@ -143,7 +143,7 @@ try {
         Clear-EnvFakeKnobs
         $label = $script.BaseName
         Write-Host ''
-        Write-Host ("── [{0}/{1}] {2}" -f $index, $testScripts.Count, $label) -ForegroundColor DarkCyan
+        Write-Host ("-- [{0}/{1}] {2}" -f $index, $testScripts.Count, $label) -ForegroundColor DarkCyan
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
             & $script.FullName -Suite $suite
@@ -169,7 +169,7 @@ try {
 
     if ($UseRealTracker) {
         Write-Host ''
-        Write-Host '── Optional: RealTrackerSmoke' -ForegroundColor DarkCyan
+        Write-Host '-- Optional: RealTrackerSmoke' -ForegroundColor DarkCyan
         $trackerDir = Find-RealTrackerDir
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         if (-not $trackerDir) {
@@ -248,7 +248,7 @@ Write-ResultTable $results
 Write-Host ''
 $totalMs = ($results | Measure-Object -Property Ms -Sum).Sum
 if ($null -eq $totalMs) { $totalMs = 0 }
-Write-Host ("  Totals:  {0} passed  ·  {1} failed  ·  {2} skipped" -f $passed.Count, $failed.Count, $skipped.Count) -ForegroundColor White
+Write-Host ("  Totals:  {0} passed  *  {1} failed  *  {2} skipped" -f $passed.Count, $failed.Count, $skipped.Count) -ForegroundColor White
 Write-Host ("  Scenario time: {0}   Wall clock: {1}" -f (Format-DurationMs $totalMs), (Format-DurationMs $suiteSw.Elapsed.TotalMilliseconds)) -ForegroundColor DarkGray
 Write-Host ''
 

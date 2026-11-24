@@ -1,4 +1,4 @@
-# Document cwd/env sensitivity: cache key is the command string only (not cwd/env)
+﻿# Document cwd/env sensitivity: cache key is the command string only (not cwd/env)
 param($Suite)
 
 Clear-EnvFakeKnobs

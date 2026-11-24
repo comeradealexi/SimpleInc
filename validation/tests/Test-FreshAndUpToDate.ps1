@@ -1,4 +1,4 @@
-# Fresh cache → run; identical second call → skip
+﻿# Fresh cache → run; identical second call → skip
 param($Suite)
 
 Clear-EnvFakeKnobs

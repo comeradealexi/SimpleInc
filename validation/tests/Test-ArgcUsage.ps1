@@ -1,4 +1,4 @@
-# Bad argc / usage text
+﻿# Bad argc / usage text
 param($Suite)
 
 function Invoke-SimpleIncRaw {

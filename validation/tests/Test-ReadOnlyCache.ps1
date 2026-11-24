@@ -1,4 +1,4 @@
-# Read-only cache files: dirty must still attempt rebuild (no silent up-to-date skip)
+﻿# Read-only cache files: dirty must still attempt rebuild (no silent up-to-date skip)
 param($Suite)
 
 Clear-EnvFakeKnobs

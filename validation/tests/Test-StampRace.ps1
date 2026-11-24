@@ -1,4 +1,4 @@
-# Overlapping rebuilds of the same command (stamp race): end state must not be false up-to-date
+﻿# Overlapping rebuilds of the same command (stamp race): end state must not be false up-to-date
 param($Suite)
 
 Clear-EnvFakeKnobs

@@ -22,6 +22,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -180,18 +181,99 @@ internal static class FakeTracker
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcessW(
+        string lpApplicationName,
+        StringBuilder lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO
+    {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    // Run the child via CreateProcessW — not cmd.exe — so long command lines
+    // (CreateProcess allows ~32K) are not truncated by cmd's 8191-char limit.
     private static int RunCommand(string command)
     {
-        var psi = new ProcessStartInfo
+        var si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        PROCESS_INFORMATION pi;
+        // CreateProcessW requires a mutable buffer for lpCommandLine.
+        var buffer = new StringBuilder(command);
+        if (!CreateProcessW(
+            null,
+            buffer,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            false,
+            0,
+            IntPtr.Zero,
+            null,
+            ref si,
+            out pi))
         {
-            FileName = "cmd.exe",
-            Arguments = "/C " + command,
-            UseShellExecute = false,
-        };
-        using (var p = Process.Start(psi))
+            int err = Marshal.GetLastWin32Error();
+            Console.Error.WriteLine("FakeTracker: CreateProcessW failed ({0}).", err);
+            return err == 0 ? 1 : err;
+        }
+        try
         {
-            p.WaitForExit();
-            return p.ExitCode;
+            WaitForSingleObject(pi.hProcess, 0xFFFFFFFF);
+            uint exitCode;
+            if (!GetExitCodeProcess(pi.hProcess, out exitCode))
+            {
+                return 1;
+            }
+            return unchecked((int)exitCode);
+        }
+        finally
+        {
+            if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+            if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
         }
     }
 
