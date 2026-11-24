@@ -17,14 +17,14 @@
 #define DebugPrint(...)
 #endif
 
-static const char* kCompleteFlagName = "complete.flag";
-static const char* kReadFilesName = "readfiles.txt";
-static const char* kWriteFilesName = "writefiles.txt";
+static const wchar_t* kCompleteFlagName = L"complete.flag";
+static const wchar_t* kReadFilesName = L"readfiles.txt";
+static const wchar_t* kWriteFilesName = L"writefiles.txt";
 
 //https://stackoverflow.com/questions/6218325/how-do-you-check-if-a-directory-exists-on-windows-in-c
-BOOL DirectoryExists(LPCSTR szPath)
+BOOL DirectoryExists(LPCWSTR szPath)
 {
-	DWORD dwAttrib = GetFileAttributesA(szPath);
+	DWORD dwAttrib = GetFileAttributesW(szPath);
 	return (dwAttrib != INVALID_FILE_ATTRIBUTES && (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 }
 
@@ -90,33 +90,27 @@ FILETIME GetFileModifiedTime(LPCWSTR lpFileName)
 	return {};
 }
 
-std::string GetTempDir(const char* temp_dir, size_t hash)
+std::wstring GetTempDir(const std::wstring& temp_dir, size_t hash)
 {
-	std::string temp_folder = temp_dir;
-	temp_folder += "\\";
-	temp_folder += std::to_string(hash);
-	return temp_folder;
+	return temp_dir + L"\\" + std::to_wstring(hash);
 }
 
-std::string JoinPath(const char* dir, const char* name)
+std::wstring JoinPath(const std::wstring& dir, const wchar_t* name)
 {
-	std::string path = dir;
-	path += "\\";
-	path += name;
-	return path;
+	return dir + L"\\" + name;
 }
 
-bool CacheComplete(const char* cache_dir)
+bool CacheComplete(const std::wstring& cache_dir)
 {
-	return PathFileExistsA(JoinPath(cache_dir, kCompleteFlagName).c_str()) != FALSE;
+	return PathFileExistsW(JoinPath(cache_dir, kCompleteFlagName).c_str()) != FALSE;
 }
 
 // Returns true if the command must be re-run (cache missing, incomplete, or stale).
-bool CheckIfOutOfDate(const char* cache_dir)
+bool CheckIfOutOfDate(const std::wstring& cache_dir)
 {
-	if (!DirectoryExists(cache_dir))
+	if (!DirectoryExists(cache_dir.c_str()))
 	{
-		CreateDirectoryA(cache_dir, NULL);
+		CreateDirectoryW(cache_dir.c_str(), NULL);
 		return true;
 	}
 
@@ -124,13 +118,13 @@ bool CheckIfOutOfDate(const char* cache_dir)
 	// must never be treated as up-to-date.
 	if (!CacheComplete(cache_dir))
 	{
-		DebugPrint("Cache incomplete (missing %s)\n", kCompleteFlagName);
+		DebugPrint("Cache incomplete (missing complete.flag)\n");
 		return true;
 	}
 
-	auto check_mtime_list = [](const char* list_path, const char* label) -> bool
+	auto check_mtime_list = [](const std::wstring& list_path, const char* label) -> bool
 	{
-		std::ifstream files(list_path);
+		std::ifstream files(std::filesystem::path(list_path), std::ios::binary);
 		if (!files.good())
 		{
 			DebugPrint("Could not open %s\n", label);
@@ -173,45 +167,45 @@ bool CheckIfOutOfDate(const char* cache_dir)
 		return false;
 	};
 
-	if (check_mtime_list(JoinPath(cache_dir, kReadFilesName).c_str(), kReadFilesName))
+	if (check_mtime_list(JoinPath(cache_dir, kReadFilesName), "readfiles.txt"))
 	{
 		return true;
 	}
-	if (check_mtime_list(JoinPath(cache_dir, kWriteFilesName).c_str(), kWriteFilesName))
+	if (check_mtime_list(JoinPath(cache_dir, kWriteFilesName), "writefiles.txt"))
 	{
 		return true;
 	}
 	return false;
 }
 
-std::string BuildTrackerCommandLine(const char* tracker_path, const char* cache_folder, const char* command_line)
+std::wstring BuildTrackerCommandLine(const std::wstring& tracker_path, const std::wstring& cache_folder, const std::wstring& command_line)
 {
-	std::stringstream s;
-	s << "\"" << tracker_path << "\"" << " /i \"" << cache_folder << "\" /c ";
+	std::wstringstream s;
+	s << L"\"" << tracker_path << L"\"" << L" /i \"" << cache_folder << L"\" /c ";
 	s << command_line;
 	return s.str();
 }
 
-DWORD RunCommand(std::string& cmd)
+DWORD RunCommand(std::wstring& cmd)
 {
-	DebugPrint("Running command: %s\n", cmd.c_str());
-	STARTUPINFOA si;
+	DebugPrint("Running command: %s\n", WideToUtf8(cmd).c_str());
+	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 
 	ZeroMemory(&si, sizeof(si));
 	si.cb = sizeof(si);
 	ZeroMemory(&pi, sizeof(pi));
 
-	// Start the child process.
-	if (!CreateProcessA(NULL,   // No module name (use command line)
-		cmd.data(), // Command line (mutable buffer required by CreateProcessA)
+	// Start the child process (Unicode command line so non-ASCII paths survive).
+	if (!CreateProcessW(NULL,   // No module name (use command line)
+		cmd.data(), // Command line (mutable buffer required by CreateProcessW)
 		NULL,       // Process handle not inheritable
 		NULL,       // Thread handle not inheritable
 		FALSE,      // Set handle inheritance to FALSE
 		0,          // No creation flags
 		NULL,       // Use parent's environment block
 		NULL,       // Use parent's starting directory
-		&si,        // Pointer to STARTUPINFO structure
+		&si,        // Pointer to STARTUPINFOW structure
 		&pi)        // Pointer to PROCESS_INFORMATION structure
 		)
 	{
@@ -237,13 +231,13 @@ DWORD RunCommand(std::string& cmd)
 // Tracker.exe writes UTF-16 text with an optional BOM. Accept CRLF and LF;
 // include a final line that lacks a trailing newline.
 template <typename LAMBDA_PER_LINE>
-void ProcessUTF16FileByLine(const char* pFile, LAMBDA_PER_LINE lambda)
+void ProcessUTF16FileByLine(const std::wstring& file_path, LAMBDA_PER_LINE lambda)
 {
 	static_assert(sizeof(wchar_t) == 2);
-	FILE* f = fopen(pFile, "rb");
+	FILE* f = _wfopen(file_path.c_str(), L"rb");
 	if (!f)
 	{
-		DebugPrint("Failed to open file for reading: %s\n", pFile);
+		DebugPrint("Failed to open file for reading: %s\n", WideToUtf8(file_path).c_str());
 		return;
 	}
 	fseek(f, 0, SEEK_END);
@@ -256,7 +250,7 @@ void ProcessUTF16FileByLine(const char* pFile, LAMBDA_PER_LINE lambda)
 	}
 	if ((len % (long)sizeof(wchar_t)) != 0)
 	{
-		DebugPrint("UTF-16 file has odd byte length, truncating: %s\n", pFile);
+		DebugPrint("UTF-16 file has odd byte length, truncating: %s\n", WideToUtf8(file_path).c_str());
 		len -= (len % (long)sizeof(wchar_t));
 	}
 	// +1 wchar_t so a final line without a newline can be null-terminated in place.
@@ -271,7 +265,7 @@ void ProcessUTF16FileByLine(const char* pFile, LAMBDA_PER_LINE lambda)
 	fclose(f);
 	if (bytes_read != (size_t)len)
 	{
-		DebugPrint("Short read on %s (%zu of %ld bytes)\n", pFile, bytes_read, len);
+		DebugPrint("Short read on %s (%zu of %ld bytes)\n", WideToUtf8(file_path).c_str(), bytes_read, len);
 		free(data);
 		return;
 	}
@@ -313,44 +307,45 @@ void ProcessUTF16FileByLine(const char* pFile, LAMBDA_PER_LINE lambda)
 	free(data);
 }
 
-void ClearCacheDir(const char* cache_dir)
+void ClearCacheDir(const std::wstring& cache_dir)
 {
-	DebugPrint("Clearing cache directory %s\n", cache_dir);
+	DebugPrint("Clearing cache directory %s\n", WideToUtf8(cache_dir).c_str());
 	std::error_code ec;
-	if (!std::filesystem::exists(cache_dir, ec))
+	const std::filesystem::path root(cache_dir);
+	if (!std::filesystem::exists(root, ec))
 	{
 		return;
 	}
-	for (const auto& entry : std::filesystem::directory_iterator(cache_dir, ec))
+	for (const auto& entry : std::filesystem::directory_iterator(root, ec))
 	{
 		std::filesystem::remove_all(entry.path(), ec);
 	}
 }
 
-bool WriteUtf8FileAtomic(const char* final_path, const std::string& contents)
+bool WriteUtf8FileAtomic(const std::wstring& final_path, const std::string& contents)
 {
-	std::string temp_path = final_path;
-	temp_path += ".tmp";
+	std::wstring temp_path = final_path;
+	temp_path += L".tmp";
 
 	{
-		std::ofstream out(temp_path, std::ios::binary | std::ios::trunc);
+		std::ofstream out(std::filesystem::path(temp_path), std::ios::binary | std::ios::trunc);
 		if (!out.good())
 		{
-			DebugPrint("Failed to open temp cache file: %s\n", temp_path.c_str());
+			DebugPrint("Failed to open temp cache file: %s\n", WideToUtf8(temp_path).c_str());
 			return false;
 		}
 		out.write(contents.data(), (std::streamsize)contents.size());
 		if (!out.good())
 		{
-			DebugPrint("Failed to write temp cache file: %s\n", temp_path.c_str());
+			DebugPrint("Failed to write temp cache file: %s\n", WideToUtf8(temp_path).c_str());
 			return false;
 		}
 	}
 
-	if (!MoveFileExA(temp_path.c_str(), final_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	if (!MoveFileExW(temp_path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 	{
-		DebugPrint("Failed to publish cache file %s (%lu)\n", final_path, GetLastError());
-		DeleteFileA(temp_path.c_str());
+		DebugPrint("Failed to publish cache file %s (%lu)\n", WideToUtf8(final_path).c_str(), GetLastError());
+		DeleteFileW(temp_path.c_str());
 		return false;
 	}
 	return true;
@@ -363,12 +358,12 @@ bool IsWriteTlogFilename(const std::filesystem::path& path)
 	return filename.find(L".write.") != std::wstring::npos;
 }
 
-bool BuildCacheFile(const char* cache_dir)
+bool BuildCacheFile(const std::wstring& cache_dir)
 {
 	std::unordered_map<std::wstring, FILETIME> read_files;
 	std::unordered_map<std::wstring, FILETIME> write_files;
 	std::error_code ec;
-	for (const auto& entry : std::filesystem::directory_iterator(cache_dir, ec))
+	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(cache_dir), ec))
 	{
 		if (entry.path().extension() != L".tlog")
 		{
@@ -379,8 +374,7 @@ bool BuildCacheFile(const char* cache_dir)
 		std::unordered_map<std::wstring, FILETIME>* map_files =
 			IsWriteTlogFilename(entry.path()) ? &write_files : &read_files;
 
-		const std::string tlog_path_utf8 = WideToUtf8(entry.path().wstring());
-		ProcessUTF16FileByLine(tlog_path_utf8.c_str(), [&](wchar_t* line)
+		ProcessUTF16FileByLine(entry.path().wstring(), [&](wchar_t* line)
 			{
 				if (line[0] == L'\0')
 				{
@@ -417,24 +411,24 @@ bool BuildCacheFile(const char* cache_dir)
 		return out;
 	};
 
-	const std::string read_path = JoinPath(cache_dir, kReadFilesName);
-	const std::string write_path = JoinPath(cache_dir, kWriteFilesName);
-	const std::string complete_path = JoinPath(cache_dir, kCompleteFlagName);
+	const std::wstring read_path = JoinPath(cache_dir, kReadFilesName);
+	const std::wstring write_path = JoinPath(cache_dir, kWriteFilesName);
+	const std::wstring complete_path = JoinPath(cache_dir, kCompleteFlagName);
 
 	// Ensure a prior incomplete publish cannot leave a stale sentinel.
-	DeleteFileA(complete_path.c_str());
+	DeleteFileW(complete_path.c_str());
 
-	if (!WriteUtf8FileAtomic(read_path.c_str(), serialize_map(read_files)))
+	if (!WriteUtf8FileAtomic(read_path, serialize_map(read_files)))
 	{
 		return false;
 	}
-	if (!WriteUtf8FileAtomic(write_path.c_str(), serialize_map(write_files)))
+	if (!WriteUtf8FileAtomic(write_path, serialize_map(write_files)))
 	{
 		return false;
 	}
 
 	// Sentinel last: only present when both cache files were published successfully.
-	if (!WriteUtf8FileAtomic(complete_path.c_str(), "ok\n"))
+	if (!WriteUtf8FileAtomic(complete_path, "ok\n"))
 	{
 		return false;
 	}
@@ -461,13 +455,13 @@ struct ScopedTimer
 };
 #endif
 
-// Return the arg and its index in GetCommandLine
-std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
+// Return the arg and its index in GetCommandLineW (wchar offsets).
+std::pair<std::wstring, int> GetCommandToRun(size_t arg_idx)
 {
-	// We use GetCommandLineA here rather than params passed to main because argv has the quotes stripped.
-	LPSTR pCommandLine = GetCommandLineA();
+	// We use GetCommandLineW here rather than params passed to wmain because argv has the quotes stripped.
+	LPCWSTR pCommandLine = GetCommandLineW();
 
-	size_t length = strlen(pCommandLine);
+	size_t length = wcslen(pCommandLine);
 
 	// Find where the arg_idx begins
 	int arg_start = 0;
@@ -475,14 +469,14 @@ std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
 	int quote_cnt = 0;
 	for (int i = 0; i < (int)length; i++)
 	{
-		if (pCommandLine[i] == '\"')
+		if (pCommandLine[i] == L'\"')
 		{
 			quote_cnt++;
 		}
-		else if (pCommandLine[i] == ' ' && (quote_cnt % 2) == 0)
+		else if (pCommandLine[i] == L' ' && (quote_cnt % 2) == 0)
 		{
 			//Skip ahead any additional spaces in the command line
-			while (pCommandLine[i] == ' ')
+			while (pCommandLine[i] == L' ')
 			{
 				i++;
 			}
@@ -490,16 +484,16 @@ std::pair<std::string, int> GetCommandToRun(size_t arg_idx)
 
 			if (arg_cnt == (int)arg_idx)
 			{
-				return { std::string(&(pCommandLine[arg_start]), i - arg_start), arg_start };
+				return { std::wstring(&(pCommandLine[arg_start]), i - arg_start), arg_start };
 			}
 			arg_start = i + 1;
 			arg_cnt++;
 		}
 	}
-	return { std::string(&(pCommandLine[arg_start]), length - arg_start), arg_start };
+	return { std::wstring(&(pCommandLine[arg_start]), length - arg_start), arg_start };
 }
 
-int main(int argc, char* argv[])
+int wmain(int argc, wchar_t* argv[])
 {
 #ifdef USE_TIMER
 	ScopedTimer timer;
@@ -511,29 +505,29 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
-	std::string tracker_path(argv[1]);
-	tracker_path += "\\Tracker.exe";
+	std::wstring tracker_path(argv[1]);
+	tracker_path += L"\\Tracker.exe";
 
-	// We use GetCommandLineA here rather than params passed to main because argv has the quotes stripped.
-	std::string command_line = GetCommandLineA() + GetCommandToRun(3).second;
+	// We use GetCommandLineW here rather than params passed to wmain because argv has the quotes stripped.
+	std::wstring command_line = GetCommandLineW() + GetCommandToRun(3).second;
 
-	// Generate unique hash from command to run.
+	// Generate unique hash from UTF-8 of the Unicode command line (stable across locales).
 	const std::hash<std::string> string_hasher;
-	const size_t command_line_hash = string_hasher(command_line);
+	const size_t command_line_hash = string_hasher(WideToUtf8(command_line));
 
 	// Build a unique folder to put cache files based on the command line
-	const std::string cache_dir = GetTempDir(argv[2], command_line_hash);
-	if (CheckIfOutOfDate(cache_dir.c_str()))
+	const std::wstring cache_dir = GetTempDir(argv[2], command_line_hash);
+	if (CheckIfOutOfDate(cache_dir))
 	{
-		ClearCacheDir(cache_dir.c_str()); // Clear any cache files from previous run
-		std::string cmd = BuildTrackerCommandLine(tracker_path.c_str(), cache_dir.c_str(), command_line.c_str());
+		ClearCacheDir(cache_dir); // Clear any cache files from previous run
+		std::wstring cmd = BuildTrackerCommandLine(tracker_path, cache_dir, command_line);
 		const DWORD ret = RunCommand(cmd);
 		if (ret == 0)
 		{
 			// Process succeeded, process and write cache files.
-			if (!BuildCacheFile(cache_dir.c_str()))
+			if (!BuildCacheFile(cache_dir))
 			{
-				ClearCacheDir(cache_dir.c_str());
+				ClearCacheDir(cache_dir);
 				DebugPrint("Failed to publish cache; cleared incomplete cache dir.\n");
 				return -1;
 			}
@@ -541,7 +535,7 @@ int main(int argc, char* argv[])
 		else
 		{
 			// Process returned error exit code. Clear cache dir.
-			ClearCacheDir(cache_dir.c_str());
+			ClearCacheDir(cache_dir);
 		}
 		return ret;
 	}
