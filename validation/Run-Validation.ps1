@@ -11,7 +11,7 @@
   Do not run MSBuild. Requires -AllowPrebuilt.
 
 .PARAMETER AllowPrebuilt
-  Permit Bin\Release\SimpleInc.exe when -SkipBuild is set or MSBuild is missing.
+  Permit a local Bin\Release\SimpleInc.exe when -SkipBuild is set or MSBuild is missing. That file is not in the repo. Without this switch the suite fails closed.
   Without this switch the suite fails closed instead of validating a stale binary.
 
 .PARAMETER KeepWorkRoot

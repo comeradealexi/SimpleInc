@@ -117,14 +117,14 @@ function Build-SimpleInc {
     $prebuilt = Join-Path $RepoRoot 'Bin\Release\SimpleInc.exe'
     $msbuild = Find-MSBuild
 
-    # Checked-in Bin\Release is not rebuilt by this script. Using it without an
-    # explicit opt-in validates a stale binary and reports PASS.
+    # Bin\Release\SimpleInc.exe is not in the repo. Using a binary from that
+    # path without an explicit opt-in would skip the build and can hide source drift.
     if ($SkipBuild -or -not $msbuild) {
         if (-not $AllowPrebuilt) {
             if ($SkipBuild) {
                 throw "Refusing prebuilt $prebuilt. -SkipBuild requires -AllowPrebuilt (that binary may not match source)."
             }
-            throw "MSBuild not found. Refusing prebuilt $prebuilt. Install Visual Studio Build Tools, or pass -AllowPrebuilt to use the checked-in binary."
+            throw "MSBuild not found. Refusing prebuilt $prebuilt. Install Visual Studio Build Tools, or pass -AllowPrebuilt and supply a binary you built at that path."
         }
         if (-not (Test-Path $prebuilt)) {
             throw "AllowPrebuilt requested but prebuilt binary missing: $prebuilt"
@@ -147,8 +147,8 @@ function Build-SimpleInc {
     }
     $built = Join-Path $OutDir 'SimpleInc.exe'
     if (-not (Test-Path $built)) {
-        # Default vcxproj output when /p:OutDir is ignored. Not Bin\Release —
-        # that tree is a checked-in binary and is only used with -AllowPrebuilt.
+        # Default vcxproj output when /p:OutDir is ignored. Bin\Release is not
+        # a build product of this script; it is consulted only with -AllowPrebuilt.
         $alts = @(
             (Join-Path $RepoRoot 'x64\Release\SimpleInc.exe'),
             (Join-Path $RepoRoot 'Release\SimpleInc.exe')
