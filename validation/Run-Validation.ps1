@@ -156,13 +156,23 @@ try {
         catch {
             $sw.Stop()
             $detail = $_.Exception.Message
-            if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
-            $results.Add([pscustomobject]@{
-                Name = $label; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
-            })
-            Write-ValLog ("FAIL {0}: {1}" -f $label, $_.Exception.Message) 'FAIL'
-            if ($_.ScriptStackTrace) {
-                Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+            # Tests throw "SKIP: ..." for environmental soft-skips (must not count as PASS).
+            if ($detail -like 'SKIP:*') {
+                if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
+                $results.Add([pscustomobject]@{
+                    Name = $label; Status = 'SKIP'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
+                })
+                Write-ValLog ("SKIP {0}: {1}" -f $label, $_.Exception.Message) 'WARN'
+            }
+            else {
+                if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
+                $results.Add([pscustomobject]@{
+                    Name = $label; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
+                })
+                Write-ValLog ("FAIL {0}: {1}" -f $label, $_.Exception.Message) 'FAIL'
+                if ($_.ScriptStackTrace) {
+                    Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+                }
             }
         }
     }

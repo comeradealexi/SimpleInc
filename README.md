@@ -39,7 +39,7 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 | `Test-DirtyInvalidation` | Rebuilds on read mtime change, write mtime/clobber, missing write, missing/corrupt/truncated cache lists. |
 | `Test-SentinelAndPartial` | Empty hash dir, missing `complete.flag`, sentinel-only, or leftover `.tmp` → never treated as up-to-date. |
 | `Test-Quotes` | Paths with spaces / nested quotes and multi-space argv survive into the child. |
-| `Test-UnicodePaths` | Non-ASCII paths round-trip in UTF-8 cache; up-to-date + write-clobber still work (skips if FS can't create them). |
+| `Test-UnicodePaths` | Non-ASCII paths round-trip in UTF-8 cache via Unicode APIs; up-to-date + write-clobber still work (skips only if the FS can't create the paths). |
 | `Test-TlogParsing` | `.tlog` CRLF vs LF vs no final newline; path dedupe; empty tlogs; read vs write from **filename**, even if cache root contains `.write.`. |
 | `Test-FailedChild` | Non-zero child exit clears stamp; same command must re-run (no false up-to-date). |
 | `Test-MissingTracker` | Missing `Tracker.exe` → non-zero exit and no `complete.flag`. |
@@ -58,3 +58,8 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 `-UseRealTracker` (optional): one smoke against the real VS `Tracker.exe` if vswhere finds it.
 
 # Limitations
+
+- **Cache key** is the trailing command string only (not cwd or environment). Identical relative commands from different directories share one hash dir.
+- **Mtime only** — delete/recreate with the same `FILETIME` does not invalidate.
+- **No cross-process lock** on a hash directory; overlapping rebuilds of the same command are best-effort.
+- Requires Visual Studio / Build Tools **Tracker.exe**.
