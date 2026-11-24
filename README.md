@@ -20,12 +20,30 @@ msbuild SimpleInc.sln /p:Configuration=Release /p:Platform=x64
 
 # Validation
 
-On Windows, run the automated suite (builds helpers, exercises cache/CLI/tlog edge cases, cleans temp files):
+On Windows, the suite builds SimpleInc + helpers, runs every scenario under a temp work root, then deletes that work root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\validation\Run-Validation.ps1
 ```
 
-See `validation/README.md` for options (`-UseRealTracker`, `-KeepWorkRoot`, …).
+Optional: `-UseRealTracker`, `-KeepWorkRoot`, `-Filter <name>`, `-SkipBuild`. Details in `validation/README.md`.
+
+### Suite TLDR (what each scenario covers)
+
+| Script | What it checks |
+| --- | --- |
+| `Test-ArgcUsage` | Too few args → usage text with newlines + non-zero exit (no crash). |
+| `Test-FreshAndUpToDate` | Cold/missing cache runs once; identical second call skips (FakeTracker not re-invoked). |
+| `Test-DirtyInvalidation` | Rebuilds on read mtime change, write mtime/clobber, missing write, missing/corrupt/truncated cache lists. |
+| `Test-SentinelAndPartial` | Empty hash dir, missing `complete.flag`, sentinel-only, or leftover `.tmp` → never treated as up-to-date. |
+| `Test-Quotes` | Paths with spaces / nested quotes and multi-space argv survive into the child. |
+| `Test-UnicodePaths` | Non-ASCII paths round-trip in UTF-8 cache; up-to-date + write-clobber still work (skips if FS can't create them). |
+| `Test-TlogParsing` | `.tlog` CRLF vs LF vs no final newline; path dedupe; empty tlogs; read vs write from **filename**, even if cache root contains `.write.`. |
+| `Test-FailedChild` | Non-zero child exit clears stamp; same command must re-run (no false up-to-date). |
+| `Test-MissingTracker` | Missing `Tracker.exe` → non-zero exit and no `complete.flag`. |
+| `Test-CacheIdentity` | Different commands get different hash dirs; same command reuses its dir and skips. |
+| `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; skip-tlogs still publishes sentinel; concurrent identical runs exit 0 without a false-complete stamp. |
+
+`-UseRealTracker` (optional): one smoke against the real VS `Tracker.exe` if vswhere finds it.
 
 # Limitations
