@@ -6,7 +6,7 @@ SimpleInc runs a command through Visual Studio's `Tracker.exe` and skips later r
 
 `Tracker.exe` ships with Visual Studio and the Build Tools. It watches a child process and writes `.tlog` files listing the paths that process read and wrote.
 
-SimpleInc keeps those paths, plus each path's last-write `FILETIME`, under a cache directory named for the command and the working directory. The next launch reads that stamp. If every recorded path is still there and still has the same timestamp, SimpleInc exits 0 and does not start the command. If anything is missing, unreadable, or newer, it runs the command again and publishes a new stamp.
+SimpleInc keeps those paths, plus each path's last-write `FILETIME`, under a cache directory named for the command and the working directory. The next launch reads that stamp. If every recorded path is still there and still has the same timestamp, SimpleInc exits 0 and does not start the command. If anything is missing, unreadable, or newer, it runs the command again and publishes a new stamp. If the run records no read paths and no write paths, SimpleInc does not publish a stamp, clears that directory, and exits non-zero.
 
 # How to use
 
@@ -78,6 +78,7 @@ SimpleInc runs the command when:
 - `complete.flag` is missing, or either list is missing, unreadable, truncated, or has a bad timestamp.
 - Any recorded read or write path is missing, unreadable, or its last-write `FILETIME` differs.
 - The previous run exited non-zero. The stamp is deleted (the lock file stays) so the next launch tries again.
+- Tracker exits 0 but records no read paths and no write paths. SimpleInc does not publish `complete.flag`, clears the hash directory (the lock file stays), and exits non-zero so the next launch tries again.
 
 It skips, exits 0, and does not start Tracker when `complete.flag` is present and every recorded path still has the same `FILETIME`.
 
@@ -138,11 +139,11 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 | `Test-SentinelAndPartial` | Empty hash dir, missing `complete.flag`, sentinel-only, or leftover `.tmp` → never treated as up-to-date. |
 | `Test-Quotes` | Paths with spaces / nested quotes and multi-space argv survive into the child. A `"` in the Tracker directory or cache root fails with an explanation and does not publish. |
 | `Test-UnicodePaths` | Non-ASCII paths round-trip in UTF-8 cache via Unicode APIs; up-to-date + write-clobber still work (skips only if the FS can't create the paths). |
-| `Test-TlogParsing` | `.tlog` CRLF vs LF vs no final newline; path dedupe; empty tlogs; read vs write from **filename**, even if cache root contains `.write.`. |
+| `Test-TlogParsing` | `.tlog` CRLF vs LF vs no final newline; path dedupe; header-only tlogs are incomplete (no `complete.flag`, non-zero exit); read vs write from **filename**, even if cache root contains `.write.`. |
 | `Test-FailedChild` | Non-zero child exit clears stamp; same command must re-run (no false up-to-date). |
 | `Test-MissingTracker` | Missing `Tracker.exe` → non-zero exit and no `complete.flag`. |
 | `Test-CacheIdentity` | Different commands get different hash dirs; same command reuses its dir and skips. |
-| `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; skip-tlogs still publishes sentinel; four overlapping identical runs exit 0, invoke Tracker once, and a later call skips. |
+| `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; a Tracker run with no paths does not publish `complete.flag` and exits non-zero; four overlapping identical runs exit 0, invoke Tracker once, and a later call skips. |
 | `Test-LargeTlog` | Hundreds of read/write paths via list files + sharded `.tlog`s; up-to-date skip; mid-list mtime dirty. |
 | `Test-DeepLongPaths` | Deep nested directories + long filenames survive cache round-trip and skip. |
 | `Test-SameMtimeRecreate` | Delete/recreate with identical FILETIME does **not** invalidate (mtime-only); a real mtime bump does. |
@@ -158,7 +159,7 @@ The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
 # Limitations
 
 - **Environment is outside the cache key.** `PATH`, `INCLUDE`, `CL`, and any other variable can change which work a command does while the stamp still matches. Put flags that must invalidate the run on the command line.
-- **A zero-path stamp is treated as up to date.** If Tracker exits 0 and records no reads and no writes, SimpleInc still publishes `complete.flag` with empty lists, and the next launch skips. That is right for a command that truly touches nothing. It is wrong when Tracker failed to record real file access.
+- **A command that records no files is never cached.** If Tracker exits 0 and records no reads and no writes, SimpleInc does not publish `complete.flag`. It clears the hash directory (the lock file stays) and exits non-zero, and the next launch tries again. A silent Tracker miss cannot stay up to date. A command that truly touches nothing is retried every time, because that miss cannot be told apart from a real no-op.
 - **Windows only.** The program uses the Win32 process and file APIs and a Visual Studio / Build Tools `Tracker.exe` next to the directory you pass. There is no Linux or macOS build.
 - **Mtime only.** Deleting a file and recreating it with the same `FILETIME` does not invalidate the stamp.
 - **The working-directory key is not case-folded**, and 8.3 short names are not expanded to their long form.

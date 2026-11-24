@@ -1,4 +1,4 @@
-﻿# .tlog edge cases: newlines, classification by filename, empty, duplicates
+﻿# .tlog edge cases: newlines, classification by filename, header-only (incomplete), duplicates
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -84,23 +84,30 @@ $null = Run-TlogScenario -Name 'tlog-dup' -EnvExtra @{ SIMPLEINC_FAKE_DUP_PATHS 
     Assert-equal 1 $pathHits.Count 'duplicate write paths should dedupe'
 }
 
-# Empty / header-only tlogs → empty maps but still complete
-$null = Run-TlogScenario -Name 'tlog-empty' -EnvExtra @{ SIMPLEINC_FAKE_EMPTY_TLOG = '1' } -AfterFirst {
-    param($ctx, $cacheDir, $inFile, $outFile)
-    $readText = Get-Content (Join-Path $cacheDir 'readfiles.txt') -Raw -ErrorAction SilentlyContinue
-    $writeText = Get-Content (Join-Path $cacheDir 'writefiles.txt') -Raw -ErrorAction SilentlyContinue
-    Assert-True ([string]::IsNullOrWhiteSpace($readText)) 'empty tlog → empty readfiles'
-    Assert-True ([string]::IsNullOrWhiteSpace($writeText)) 'empty tlog → empty writefiles'
-    # Second run should skip (no inputs/outputs to invalidate)
-    $before = Get-FakeRunCount $ctx.RunLog
-    $child = "`"$($Suite.TouchFileExe)`" `"$outFile`""
-    $null = Invoke-SimpleInc -Ctx $ctx -CommandLine $child -EnvExtra @{
-        SIMPLEINC_FAKE_READS = $inFile
-        SIMPLEINC_FAKE_WRITES = $outFile
-        SIMPLEINC_FAKE_EMPTY_TLOG = '1'
-    }
-    Assert-equal $before (Get-FakeRunCount $ctx.RunLog) 'empty-deps cache should be up to date'
+# Header-only tlogs record zero paths → incomplete, non-zero, next run retries.
+# Not Run-TlogScenario: that helper requires a published complete cache.
+$ctxEmpty = New-TestContext -WorkRoot $Suite.WorkRoot -Name 'tlog-empty' `
+    -SimpleIncExe $Suite.SimpleIncExe -FakeTrackerDir $Suite.FakeTrackerDir
+$emptyIn = Join-Path $ctxEmpty.DataDir 'in.txt'
+$emptyOut = Join-Path $ctxEmpty.DataDir 'out.txt'
+Write-Utf8NoBom $emptyIn 'tlog-in'
+$emptyChild = "`"$($Suite.TouchFileExe)`" `"$emptyOut`""
+$envEmpty = @{
+    SIMPLEINC_FAKE_READS      = $emptyIn
+    SIMPLEINC_FAKE_WRITES     = $emptyOut
+    SIMPLEINC_FAKE_EMPTY_TLOG = '1'
 }
+$empty1 = Invoke-SimpleInc -Ctx $ctxEmpty -CommandLine $emptyChild -EnvExtra $envEmpty -AcceptExitCodes @(-1)
+Assert-ExitCode -1 $empty1.ExitCode 'header-only tlogs must exit non-zero'
+$emptyDir = Get-SingleCacheDir $ctxEmpty.CacheRoot
+Assert-True (-not (Test-Path (Join-Path $emptyDir 'complete.flag'))) 'header-only tlogs must not publish complete.flag'
+Assert-True (-not (Test-Path (Join-Path $emptyDir 'readfiles.txt'))) 'header-only tlogs must not leave readfiles.txt'
+Assert-True (-not (Test-Path (Join-Path $emptyDir 'writefiles.txt'))) 'header-only tlogs must not leave writefiles.txt'
+Assert-Equal 0 @(Get-ChildItem $emptyDir -Filter '*.tlog' -ErrorAction SilentlyContinue).Count `
+    'header-only failure must not leave tlogs behind'
+$empty2 = Invoke-SimpleInc -Ctx $ctxEmpty -CommandLine $emptyChild -EnvExtra $envEmpty -AcceptExitCodes @(-1)
+Assert-ExitCode -1 $empty2.ExitCode 'second header-only run must retry'
+Assert-Equal 2 (Get-FakeRunCount $ctxEmpty.RunLog) 'header-only stamp must not look up to date'
 
 # Classification by filename — cache root contains ".write." substring
 $null = Run-TlogScenario -Name 'tlog-classify-path' -CacheRootName 'cache.write.root' -EnvExtra @{} -AfterFirst {

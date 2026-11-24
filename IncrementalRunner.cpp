@@ -643,6 +643,15 @@ bool BuildCacheFile(const std::wstring& cache_dir)
 		DeleteFileW(entry.path().c_str());
 	}
 
+	// Zero reads and zero writes is indistinguishable from Tracker failing to
+	// record real file access. Do not publish complete.flag. The caller clears
+	// the directory (cache.lock stays) and exits non-zero so the next run retries.
+	if (read_files.empty() && write_files.empty())
+	{
+		fprintf(stderr, "SimpleInc: Tracker recorded no read or write paths; not publishing a stamp.\n");
+		return false;
+	}
+
 	auto serialize_map = [](const std::unordered_map<std::wstring, FILETIME>& files) -> std::string
 	{
 		std::string out;
