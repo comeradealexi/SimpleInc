@@ -8,8 +8,11 @@
   work root. Prints a timed per-scenario table and a final rollup.
 
 .PARAMETER SkipBuild
-  Use Bin\Release\SimpleInc.exe instead of building from source (not recommended
-  for validating local edits).
+  Do not run MSBuild. Requires -AllowPrebuilt.
+
+.PARAMETER AllowPrebuilt
+  Permit Bin\Release\SimpleInc.exe when -SkipBuild is set or MSBuild is missing.
+  Without this switch the suite fails closed instead of validating a stale binary.
 
 .PARAMETER KeepWorkRoot
   Do not delete the temp work directory after the suite (for debugging).
@@ -27,6 +30,7 @@
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
+    [switch]$AllowPrebuilt,
     [switch]$KeepWorkRoot,
     [string]$Filter = '',
     [switch]$UseRealTracker
@@ -108,7 +112,7 @@ try {
     $setupSw = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host ''
     Write-ValLog 'Setup: build SimpleInc + helpers'
-    $simpleInc = Build-SimpleInc -RepoRoot $RepoRoot -OutDir $BuildOut -SkipBuild:$SkipBuild
+    $simpleInc = Build-SimpleInc -RepoRoot $RepoRoot -OutDir $BuildOut -SkipBuild:$SkipBuild -AllowPrebuilt:$AllowPrebuilt
     Build-HelperTools -ToolsSrcDir (Join-Path $ValidationRoot 'tools') -OutDir $ToolsOut
 
     $fakeTrackerDir = Join-Path $WorkRoot 'faketracker-bin'
@@ -156,13 +160,23 @@ try {
         catch {
             $sw.Stop()
             $detail = $_.Exception.Message
-            if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
-            $results.Add([pscustomobject]@{
-                Name = $label; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
-            })
-            Write-ValLog ("FAIL {0}: {1}" -f $label, $_.Exception.Message) 'FAIL'
-            if ($_.ScriptStackTrace) {
-                Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+            # Tests throw "SKIP: ..." for environmental soft-skips (must not count as PASS).
+            if ($detail -like 'SKIP:*') {
+                if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
+                $results.Add([pscustomobject]@{
+                    Name = $label; Status = 'SKIP'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
+                })
+                Write-ValLog ("SKIP {0}: {1}" -f $label, $_.Exception.Message) 'WARN'
+            }
+            else {
+                if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
+                $results.Add([pscustomobject]@{
+                    Name = $label; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
+                })
+                Write-ValLog ("FAIL {0}: {1}" -f $label, $_.Exception.Message) 'FAIL'
+                if ($_.ScriptStackTrace) {
+                    Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+                }
             }
         }
     }

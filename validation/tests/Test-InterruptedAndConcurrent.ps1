@@ -1,4 +1,4 @@
-﻿# Interrupted publish + best-effort concurrent identical commands
+﻿# Interrupted publish + locked concurrent identical commands
 param($Suite)
 
 Clear-EnvFakeKnobs
@@ -48,52 +48,32 @@ $before = Get-FakeRunCount $ctx2.RunLog
 $null = Invoke-SimpleInc -Ctx $ctx2 -CommandLine $child2 -EnvExtra $envSkip
 Assert-equal $before (Get-FakeRunCount $ctx2.RunLog) 'empty complete cache is up to date'
 
-# --- Concurrent identical commands (best-effort): both should exit 0; end state complete or dirty-but-safe
+# --- Concurrent identical commands: cache.lock single-flights clear→run→publish.
 $ctx3 = New-TestContext -WorkRoot $Suite.WorkRoot -Name 'concurrent' `
     -SimpleIncExe $Suite.SimpleIncExe -FakeTrackerDir $Suite.FakeTrackerDir
 $out3 = Join-Path $ctx3.DataDir 'out3.txt'
 $child3 = "`"$($Suite.TouchFileExe)`" `"$out3`""
 $env3 = @{
-    SIMPLEINC_FAKE_READS  = $inFile
-    SIMPLEINC_FAKE_WRITES = $out3
-    SIMPLEINC_FAKE_RUNLOG = $ctx3.RunLog
+    SIMPLEINC_FAKE_READS          = $inFile
+    SIMPLEINC_FAKE_WRITES         = $out3
+    SIMPLEINC_FAKE_RUNLOG         = $ctx3.RunLog
+    SIMPLEINC_FAKE_CHILD_DELAY_MS = '1000'
 }
 
 $argString = "`"$($ctx3.TrackerDir)`" `"$($ctx3.CacheRoot)`" $child3"
-$jobs = 1..2 | ForEach-Object {
-    Start-Job -ScriptBlock {
-        param($Exe, $Arguments, $EnvPairs)
-        foreach ($k in $EnvPairs.Keys) {
-            [Environment]::SetEnvironmentVariable($k, $EnvPairs[$k], 'Process')
-        }
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $Exe
-        $psi.Arguments = $Arguments
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $p = [System.Diagnostics.Process]::Start($psi)
-        $null = $p.StandardOutput.ReadToEnd()
-        $null = $p.StandardError.ReadToEnd()
-        $p.WaitForExit()
-        return $p.ExitCode
-    } -ArgumentList $ctx3.SimpleInc, $argString, $env3
-}
-
-$codes = $jobs | Wait-Job | Receive-Job
-$jobs | Remove-Job -Force
+$codes = @(Invoke-SimpleIncConcurrent -Exe $ctx3.SimpleInc -Arguments $argString -EnvPairs $env3 -Count 4)
+Assert-Equal 4 $codes.Count 'concurrent launch count'
 foreach ($c in $codes) {
     Assert-Equal 0 ([int]$c) "concurrent run exit should be 0 (got $c)"
 }
 
 $dirs = @(Get-CacheHashDirs $ctx3.CacheRoot)
-Assert-True ($dirs.Count -ge 1) 'concurrent runs leave at least one hash dir'
-# Safe outcome: either complete cache, or incomplete (no false up-to-date without sentinel)
-foreach ($d in $dirs) {
-    $complete = Test-Path (Join-Path $d 'complete.flag')
-    if ($complete) {
-        Assert-True (Test-CacheComplete $d) 'if sentinel exists, lists must exist'
-    }
-}
+Assert-Equal 1 $dirs.Count 'concurrent identical commands share one hash dir'
+Assert-True (Test-CacheComplete $dirs[0]) 'concurrent publish is complete (lists + sentinel)'
+Assert-Equal 1 (Get-FakeRunCount $ctx3.RunLog) 'concurrent identical commands invoke FakeTracker once'
+
+if (Test-Path $ctx3.RunLog) { Remove-Item $ctx3.RunLog -Force }
+$null = Invoke-SimpleInc -Ctx $ctx3 -CommandLine $child3 -EnvExtra $env3
+Assert-Equal 0 (Get-FakeRunCount $ctx3.RunLog) 'serial call after concurrent publish must skip'
 
 Write-ValLog 'Test-InterruptedAndConcurrent passed'
