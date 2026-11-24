@@ -39,4 +39,48 @@ $r2 = Invoke-SimpleInc -Ctx $ctx -CommandLine $childMultiSpace -EnvExtra $envMap
 Assert-ExitCode 0 $r2.ExitCode 'multi-space command should succeed'
 Assert-True (Test-Path (Join-Path $echoOut2 'ran.txt')) 'EchoArgs ran with multi-space cmdline'
 
+# A double-quote inside the Tracker directory or cache root is rejected.
+# Those paths are wrapped in quotes on the Tracker command line and are not escaped.
+function Quote-WinArg {
+    param([string]$Value)
+    return '"' + ($Value -replace '"', '""') + '"'
+}
+
+function Invoke-SimpleIncCommandLine {
+    param([string]$Exe, [string]$Arguments)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEnd()
+    $err = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    return [pscustomobject]@{ ExitCode = $p.ExitCode; StdOut = $out; StdErr = $err }
+}
+
+function Assert-QuoteRejected {
+    param($Result, [string]$LabelFragment, [string]$What)
+    Assert-ExitCode -1 $Result.ExitCode "$What must fail"
+    $text = $Result.StdErr + $Result.StdOut
+    Assert-True ($text -match 'must not contain a double-quote') `
+        "$What should explain the double-quote rejection: OUT=$($Result.StdOut) ERR=$($Result.StdErr)"
+    Assert-True ($Result.StdErr -match [regex]::Escape($LabelFragment)) `
+        "$What should name '$LabelFragment': ERR=$($Result.StdErr)"
+}
+
+$dirsBeforeQuote = @(Get-CacheHashDirs $ctx.CacheRoot)
+$badTrackerArgs = (Quote-WinArg 'C:\track"er') + ' ' + (Quote-WinArg $ctx.CacheRoot) + ' cmd.exe /c echo hi'
+$badTracker = Invoke-SimpleIncCommandLine -Exe $ctx.SimpleInc -Arguments $badTrackerArgs
+Assert-QuoteRejected -Result $badTracker -LabelFragment 'Tracker directory' -What 'tracker path with a quote'
+Assert-Equal $dirsBeforeQuote.Count @(Get-CacheHashDirs $ctx.CacheRoot).Count `
+    'quoted tracker path must not create a hash dir'
+
+$badCacheArgs = (Quote-WinArg $ctx.TrackerDir) + ' ' + (Quote-WinArg 'C:\ca"che') + ' cmd.exe /c echo hi'
+$badCache = Invoke-SimpleIncCommandLine -Exe $ctx.SimpleInc -Arguments $badCacheArgs
+Assert-QuoteRejected -Result $badCache -LabelFragment 'Cache directory' -What 'cache root with a quote'
+
 Write-ValLog 'Test-Quotes passed'

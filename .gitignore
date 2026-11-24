@@ -26,7 +26,12 @@
 *.a
 *.lib
 
-# Executables
+# Executables and linker/debugger output. Build SimpleInc.exe locally.
+# Bin\ is not source; do not commit the exe or pdb that used to live there.
 *.exe
 *.out
 *.app
+*.pdb
+*.ilk
+*.idb
+Bin/

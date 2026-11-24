@@ -19,7 +19,7 @@ Optional switches:
 | Switch | Meaning |
 | --- | --- |
 | `-SkipBuild` | Do not run MSBuild. Requires `-AllowPrebuilt` |
-| `-AllowPrebuilt` | Permit the checked-in `Bin\Release\SimpleInc.exe` when `-SkipBuild` is set or MSBuild is missing. Omitted, the suite fails instead of validating that binary |
+| `-AllowPrebuilt` | Permit a local `Bin\Release\SimpleInc.exe` when `-SkipBuild` is set or MSBuild is missing. That file is not in the repo. Omitted, the suite fails instead of using it |
 | `-KeepWorkRoot` | Leave `%TEMP%\simpleinc-validation-*` for debugging |
 | `-Filter Dirty` | Run only `tests\Test-*Dirty*.ps1` |
 | `-UseRealTracker` | Extra smoke against the real VS `Tracker.exe` if vswhere finds it |
@@ -49,7 +49,7 @@ validation/
 | Fresh cache + up-to-date skip, including a relative tlog path | `Test-FreshAndUpToDate.ps1` |
 | Read/write mtime, missing/corrupt cache | `Test-DirtyInvalidation.ps1` |
 | `complete.flag` / empty dir / partial publish | `Test-SentinelAndPartial.ps1` |
-| Quotes + multi-space command lines | `Test-Quotes.ps1` |
+| Quotes + multi-space command lines; `"` in the Tracker directory or cache root is rejected | `Test-Quotes.ps1` |
 | Unicode path UTF-8 cache round-trip | `Test-UnicodePaths.ps1` |
 | `.tlog` CRLF/LF/no final NL, dedupe, empty, `.write.` in path | `Test-TlogParsing.ps1` |
 | Failed child / missing Tracker | `Test-FailedChild.ps1`, `Test-MissingTracker.ps1` |
@@ -62,7 +62,7 @@ validation/
 | Read-only cache files are replaced on a dirty rebuild; the next call skips | `Test-ReadOnlyCache.ps1` |
 | Very long command lines | `Test-LongCommandLine.ps1` |
 | Shared cache root, many commands | `Test-SharedCacheRoot.ps1` |
-| Cwd / env not in cache key | `Test-CwdAndEnv.ps1` |
+| Cwd is in the cache key (two folders, same relative command, both run); env is not | `Test-CwdAndEnv.ps1` |
 | Stamp race: external `cache.lock` blocks a rebuild; overlapping cold and dirty runs single-flight | `Test-StampRace.ps1` |
 | Optional real Tracker | `-UseRealTracker` |
 
@@ -74,7 +74,7 @@ FakeTracker knobs (`SIMPLEINC_FAKE_READS`, `SIMPLEINC_FAKE_READS_FILE`, `SIMPLEI
 ## Requirements
 
 - Windows x64
-- Visual Studio 2019/2022 or Build Tools with MSBuild **and** C++ toolset for the SimpleInc project (unless `-SkipBuild -AllowPrebuilt`)
+- Visual Studio 2019/2022 or Build Tools with MSBuild **and** the C++ toolset (unless `-SkipBuild -AllowPrebuilt`, which needs a `Bin\Release\SimpleInc.exe` you built yourself; that file is not in the repo)
 - .NET Framework 4.x `csc.exe` (usually `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`)
 - For `-UseRealTracker`: MSBuild/`Tracker.exe` from a VS install
 

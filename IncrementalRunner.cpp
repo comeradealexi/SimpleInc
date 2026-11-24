@@ -130,7 +130,165 @@ bool GetFileModifiedTime(LPCWSTR lpFileName, FILETIME* out_ft)
 	return true;
 }
 
-std::wstring GetTempDir(const std::wstring& temp_dir, size_t hash)
+// FNV-1a 64-bit. Public-domain, fixed constants, so cache directory names do not
+// change across MSVC/STL updates the way std::hash<std::string> can.
+// Offset basis 14695981039346656037, prime 1099511628211.
+// http://www.isthe.com/chongo/tech/comp/fnv/
+uint64_t Fnv1a64(const unsigned char* data, size_t len)
+{
+	uint64_t hash = 14695981039346656037ull;
+	for (size_t i = 0; i < len; i++)
+	{
+		hash ^= data[i];
+		hash *= 1099511628211ull;
+	}
+	return hash;
+}
+
+// Identity bytes: UTF-8 command, one 0x00 separator, UTF-8 normalized cwd.
+// The separator keeps command "ab" + cwd "c" distinct from command "a" + cwd "bc".
+bool HashCacheKey(const std::wstring& command_line, const std::wstring& cwd, uint64_t* out_hash)
+{
+	const std::string cmd_utf8 = WideToUtf8(command_line);
+	const std::string cwd_utf8 = WideToUtf8(cwd);
+	if ((!command_line.empty() && cmd_utf8.empty()) || cwd.empty() || cwd_utf8.empty())
+	{
+		return false;
+	}
+	std::string bytes;
+	bytes.reserve(cmd_utf8.size() + 1 + cwd_utf8.size());
+	bytes.append(cmd_utf8);
+	bytes.push_back('\0');
+	bytes.append(cwd_utf8);
+	*out_hash = Fnv1a64(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+	return true;
+}
+
+// On success these APIs return the length without the null, and that length is
+// smaller than the buffer. When the buffer is too small they return the required
+// size including the null.
+std::wstring QueryFullPath(const std::wstring& raw)
+{
+	wchar_t stack_buf[MAX_PATH];
+	const DWORD n = GetFullPathNameW(raw.c_str(), MAX_PATH, stack_buf, nullptr);
+	if (n == 0)
+	{
+		return {};
+	}
+	if (n < MAX_PATH)
+	{
+		return std::wstring(stack_buf, n);
+	}
+	std::wstring heap(n, L'\0');
+	const DWORD n2 = GetFullPathNameW(raw.c_str(), n, &heap[0], nullptr);
+	if (n2 == 0 || n2 >= n)
+	{
+		return {};
+	}
+	heap.resize(n2);
+	return heap;
+}
+
+std::wstring QueryCurrentDirectory()
+{
+	wchar_t stack_buf[MAX_PATH];
+	const DWORD n = GetCurrentDirectoryW(MAX_PATH, stack_buf);
+	if (n == 0)
+	{
+		return {};
+	}
+	if (n < MAX_PATH)
+	{
+		return std::wstring(stack_buf, n);
+	}
+	std::wstring heap(n, L'\0');
+	const DWORD n2 = GetCurrentDirectoryW(n, &heap[0]);
+	if (n2 == 0 || n2 >= n)
+	{
+		return {};
+	}
+	heap.resize(n2);
+	return heap;
+}
+
+// Absolute cwd, backslashes, no trailing slash except a drive root ("C:\").
+// "\\?\UNC\..." becomes "\\..." and "\\?\C:\..." becomes "C:\..." so the extended
+// form hashes the same as the Win32 form. Not case-folded.
+std::wstring NormalizeWorkingDirectory(const std::wstring& raw)
+{
+	if (raw.empty())
+	{
+		return {};
+	}
+	std::wstring full = QueryFullPath(raw);
+	if (full.empty())
+	{
+		return {};
+	}
+
+	for (wchar_t& ch : full)
+	{
+		if (ch == L'/')
+		{
+			ch = L'\\';
+		}
+	}
+
+	const std::wstring unc_prefix = L"\\\\?\\UNC\\";
+	const std::wstring ext_prefix = L"\\\\?\\";
+	if (full.rfind(unc_prefix, 0) == 0)
+	{
+		full.replace(0, unc_prefix.size(), L"\\\\");
+	}
+	else if (full.rfind(ext_prefix, 0) == 0)
+	{
+		full.erase(0, ext_prefix.size());
+	}
+
+	while (full.size() > 3 && full.back() == L'\\')
+	{
+		full.pop_back();
+	}
+
+	const bool drive = full.size() >= 3 && full[1] == L':' && full[2] == L'\\';
+	const bool unc = full.size() >= 2 && full[0] == L'\\' && full[1] == L'\\';
+	if (!drive && !unc)
+	{
+		return {};
+	}
+	return full;
+}
+
+std::wstring GetNormalizedWorkingDirectory()
+{
+	const std::wstring raw = QueryCurrentDirectory();
+	if (raw.empty())
+	{
+		return {};
+	}
+	return NormalizeWorkingDirectory(raw);
+}
+
+// Returns -1 and prints a reason when path contains '"'. Otherwise 0.
+// Tracker and cache paths are wrapped in quotes on the Tracker command line and
+// are not escaped, so an embedded quote would split the child command.
+int FailIfPathContainsQuote(const char* label, const std::wstring& path)
+{
+	if (path.find(L'"') == std::wstring::npos)
+	{
+		return 0;
+	}
+	const std::string shown = WideToUtf8(path);
+	fprintf(stderr,
+		"SimpleInc: %s must not contain a double-quote (\").\n"
+		"That path is embedded unescaped in the Tracker command line.\n"
+		"Path: %s\n",
+		label,
+		shown.c_str());
+	return -1;
+}
+
+std::wstring GetTempDir(const std::wstring& temp_dir, uint64_t hash)
 {
 	return temp_dir + L"\\" + std::to_wstring(hash);
 }
@@ -223,6 +381,8 @@ bool CheckIfOutOfDate(const std::wstring& cache_dir)
 	return false;
 }
 
+// tracker_path and cache_folder are wrapped in quotes and are not escaped.
+// wmain rejects '"' in those paths before this runs.
 std::wstring BuildTrackerCommandLine(const std::wstring& tracker_path, const std::wstring& cache_folder, const std::wstring& command_line)
 {
 	std::wstringstream s;
@@ -653,17 +813,40 @@ int wmain(int argc, wchar_t* argv[])
 		return -1;
 	}
 
+	const int tracker_quote_err = FailIfPathContainsQuote("Tracker directory", argv[1]);
+	if (tracker_quote_err != 0)
+	{
+		return tracker_quote_err;
+	}
+	const int cache_quote_err = FailIfPathContainsQuote("Cache directory", argv[2]);
+	if (cache_quote_err != 0)
+	{
+		return cache_quote_err;
+	}
+
 	std::wstring tracker_path(argv[1]);
 	tracker_path += L"\\Tracker.exe";
 
 	// We use GetCommandLineW here rather than params passed to wmain because argv has the quotes stripped.
+	// The remainder is the absolute command text: hashed and launched exactly as written.
 	std::wstring command_line = GetCommandLineW() + GetCommandToRun(3).second;
 
-	// Generate unique hash from UTF-8 of the Unicode command line (stable across locales).
-	const std::hash<std::string> string_hasher;
-	const size_t command_line_hash = string_hasher(WideToUtf8(command_line));
+	const std::wstring cwd = GetNormalizedWorkingDirectory();
+	if (cwd.empty())
+	{
+		fprintf(stderr, "SimpleInc: failed to read an absolute working directory (%lu).\n", GetLastError());
+		return -1;
+	}
 
-	// Build a unique folder to put cache files based on the command line
+	// FNV-1a over the UTF-8 command bytes plus the normalized cwd. Directory names
+	// differ from the old std::hash of the command alone; that cold cache is intended.
+	uint64_t command_line_hash = 0;
+	if (!HashCacheKey(command_line, cwd, &command_line_hash))
+	{
+		fprintf(stderr, "SimpleInc: failed to encode the command or working directory as UTF-8.\n");
+		return -1;
+	}
+
 	const std::wstring cache_dir = GetTempDir(argv[2], command_line_hash);
 
 	// Re-check inside the lock. A waiter that observed "dirty" before the winner
