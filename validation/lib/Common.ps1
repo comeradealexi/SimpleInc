@@ -5,7 +5,14 @@ $ErrorActionPreference = 'Stop'
 function Write-ValLog {
     param([string]$Message, [string]$Level = 'INFO')
     $ts = (Get-Date).ToString('HH:mm:ss')
-    Write-Host "[$ts][$Level] $Message"
+    $color = switch ($Level) {
+        'PASS'  { 'Green' }
+        'FAIL'  { 'Red' }
+        'ERROR' { 'Red' }
+        'WARN'  { 'Yellow' }
+        default { 'Gray' }
+    }
+    Write-Host "[$ts][$Level] $Message" -ForegroundColor $color
 }
 
 function Assert-True {
@@ -296,12 +303,36 @@ function Test-CacheComplete {
 
 function Clear-EnvFakeKnobs {
     $names = @(
-        'SIMPLEINC_FAKE_READS', 'SIMPLEINC_FAKE_WRITES', 'SIMPLEINC_FAKE_NEWLINE',
-        'SIMPLEINC_FAKE_DUP_PATHS', 'SIMPLEINC_FAKE_EMPTY_TLOG', 'SIMPLEINC_FAKE_SKIP_TLOGS',
-        'SIMPLEINC_FAKE_BOM', 'SIMPLEINC_FAKE_PREFIX', 'SIMPLEINC_FAKE_FORCE_EXIT',
-        'SIMPLEINC_FAKE_RUNLOG', 'SIMPLEINC_FAKE_CACHE_ROOT_MARKER'
+        'SIMPLEINC_FAKE_READS', 'SIMPLEINC_FAKE_WRITES',
+        'SIMPLEINC_FAKE_READS_FILE', 'SIMPLEINC_FAKE_WRITES_FILE',
+        'SIMPLEINC_FAKE_NEWLINE', 'SIMPLEINC_FAKE_DUP_PATHS', 'SIMPLEINC_FAKE_EMPTY_TLOG',
+        'SIMPLEINC_FAKE_SKIP_TLOGS', 'SIMPLEINC_FAKE_BOM', 'SIMPLEINC_FAKE_PREFIX',
+        'SIMPLEINC_FAKE_TLOG_SHARDS', 'SIMPLEINC_FAKE_FORCE_EXIT', 'SIMPLEINC_FAKE_RUNLOG',
+        'SIMPLEINC_FAKE_CACHE_ROOT_MARKER', 'SIMPLEINC_FAKE_CHILD_DELAY_MS'
     )
     foreach ($n in $names) {
         [Environment]::SetEnvironmentVariable($n, $null, 'Process')
     }
+}
+
+function New-ManyTouchFiles {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][int]$Count,
+        [string]$Prefix = 'f'
+    )
+    New-Item -ItemType Directory -Path $Root -Force | Out-Null
+    $paths = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $Count; $i++) {
+        $p = Join-Path $Root ("{0}-{1:D5}.txt" -f $Prefix, $i)
+        Write-Utf8NoBom $p ("content-$i")
+        [void]$paths.Add($p)
+    }
+    return ,@($paths.ToArray())
+}
+
+function Write-PathListFile {
+    param([string]$Path, [string[]]$Paths)
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllLines($Path, $Paths, $enc)
 }

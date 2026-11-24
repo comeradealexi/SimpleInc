@@ -5,7 +5,7 @@
 .DESCRIPTION
   Builds SimpleInc (MSBuild) and helper tools (csc), generates all test inputs
   under a temporary work root, runs every scenario script, then deletes the
-  work root. Designed for Windows with Visual Studio Build Tools / .NET Framework.
+  work root. Prints a timed per-scenario table and a final rollup.
 
 .PARAMETER SkipBuild
   Use Bin\Release\SimpleInc.exe instead of building from source (not recommended
@@ -39,15 +39,60 @@ $ValidationRoot = $PSScriptRoot
 $RepoRoot = Split-Path -Parent $ValidationRoot
 . (Join-Path $ValidationRoot 'lib\Common.ps1')
 
-Write-ValLog "SimpleInc validation starting"
+function Write-Banner {
+    param([string]$Title)
+    $bar = '=' * 72
+    Write-Host ''
+    Write-Host $bar -ForegroundColor DarkCyan
+    Write-Host "  $Title" -ForegroundColor Cyan
+    Write-Host $bar -ForegroundColor DarkCyan
+}
+
+function Format-DurationMs {
+    param([double]$Ms)
+    if ($Ms -ge 1000) {
+        return ('{0:N2}s' -f ($Ms / 1000.0))
+    }
+    return ('{0:N0}ms' -f $Ms)
+}
+
+function Write-ResultTable {
+    param([System.Collections.IEnumerable]$Rows)
+    $nameWidth = 36
+    Write-Host ''
+    Write-Host ("  {0,-$nameWidth}  {1,-6}  {2,10}" -f 'Scenario', 'Result', 'Duration') -ForegroundColor White
+    Write-Host ("  {0,-$nameWidth}  {1,-6}  {2,10}" -f ('-' * $nameWidth), '------', '----------') -ForegroundColor DarkGray
+    foreach ($row in $Rows) {
+        $color = switch ($row.Status) {
+            'PASS' { 'Green' }
+            'FAIL' { 'Red' }
+            'SKIP' { 'Yellow' }
+            default { 'Gray' }
+        }
+        $name = $row.Name
+        if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 1) + '…' }
+        Write-Host ("  {0,-$nameWidth}  " -f $name) -NoNewline
+        Write-Host ("{0,-6}" -f $row.Status) -ForegroundColor $color -NoNewline
+        Write-Host ("  {0,10}" -f (Format-DurationMs $row.Ms))
+        if ($row.Status -eq 'FAIL' -and $row.Detail) {
+            Write-Host ("           ↳ {0}" -f $row.Detail) -ForegroundColor Red
+        }
+    }
+}
+
+Write-Banner 'SimpleInc validation suite'
 Write-ValLog "RepoRoot=$RepoRoot"
 
 if ($env:OS -ne 'Windows_NT') {
     Write-ValLog 'This suite must run on Windows (SimpleInc.exe / Tracker are Win32).' 'ERROR'
-    Write-ValLog 'See validation/README.md for how to run on a Windows host with VS.'
+    Write-ValLog 'This cloud/Linux agent cannot execute PE binaries.' 'ERROR'
+    Write-ValLog 'On a Windows host with VS + .NET Framework csc:' 'INFO'
+    Write-ValLog '  powershell -NoProfile -ExecutionPolicy Bypass -File .\validation\Run-Validation.ps1' 'INFO'
+    Write-ValLog 'See validation/README.md for options.' 'INFO'
     exit 2
 }
 
+$suiteSw = [System.Diagnostics.Stopwatch]::StartNew()
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $WorkRoot = Join-Path $env:TEMP "simpleinc-validation-$stamp-$PID"
 $BuildOut = Join-Path $WorkRoot 'build'
@@ -55,20 +100,22 @@ $ToolsOut = Join-Path $WorkRoot 'tools'
 New-Item -ItemType Directory -Path $WorkRoot, $BuildOut, $ToolsOut -Force | Out-Null
 Write-ValLog "WorkRoot=$WorkRoot"
 
-$failed = @()
-$passed = @()
-$skipped = @()
+$results = New-Object System.Collections.Generic.List[object]
 
 try {
     Clear-EnvFakeKnobs
 
+    $setupSw = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host ''
+    Write-ValLog 'Setup: build SimpleInc + helpers'
     $simpleInc = Build-SimpleInc -RepoRoot $RepoRoot -OutDir $BuildOut -SkipBuild:$SkipBuild
     Build-HelperTools -ToolsSrcDir (Join-Path $ValidationRoot 'tools') -OutDir $ToolsOut
 
-    # SimpleInc looks for <TrackerDir>\Tracker.exe — stage FakeTracker under that name.
     $fakeTrackerDir = Join-Path $WorkRoot 'faketracker-bin'
     New-Item -ItemType Directory -Path $fakeTrackerDir -Force | Out-Null
     Copy-Item (Join-Path $ToolsOut 'FakeTracker.exe') (Join-Path $fakeTrackerDir 'Tracker.exe') -Force
+    $setupSw.Stop()
+    Write-ValLog ("Setup done in {0}" -f (Format-DurationMs $setupSw.Elapsed.TotalMilliseconds))
 
     $suite = [pscustomobject]@{
         RepoRoot        = $RepoRoot
@@ -89,27 +136,48 @@ try {
         throw "No test scripts matched Filter='$Filter'"
     }
 
-    Write-ValLog "Running $($testScripts.Count) test script(s)"
+    Write-Banner ("Running {0} scenario(s)" -f $testScripts.Count)
+    $index = 0
     foreach ($script in $testScripts) {
+        $index++
         Clear-EnvFakeKnobs
-        Write-ValLog "---- $($script.Name) ----"
+        $label = $script.BaseName
+        Write-Host ''
+        Write-Host ("── [{0}/{1}] {2}" -f $index, $testScripts.Count, $label) -ForegroundColor DarkCyan
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         try {
             & $script.FullName -Suite $suite
-            $passed += $script.Name
-            Write-ValLog "PASS $($script.Name)" 'PASS'
+            $sw.Stop()
+            $results.Add([pscustomobject]@{
+                Name = $label; Status = 'PASS'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $null
+            })
+            Write-ValLog ("PASS {0} ({1})" -f $label, (Format-DurationMs $sw.Elapsed.TotalMilliseconds)) 'PASS'
         }
         catch {
-            $failed += $script.Name
-            Write-ValLog "FAIL $($script.Name): $($_.Exception.Message)" 'FAIL'
-            Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+            $sw.Stop()
+            $detail = $_.Exception.Message
+            if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 157) + '...' }
+            $results.Add([pscustomobject]@{
+                Name = $label; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $detail
+            })
+            Write-ValLog ("FAIL {0}: {1}" -f $label, $_.Exception.Message) 'FAIL'
+            if ($_.ScriptStackTrace) {
+                Write-ValLog ($_.ScriptStackTrace) 'FAIL'
+            }
         }
     }
 
     if ($UseRealTracker) {
-        Write-ValLog '---- Optional real Tracker smoke ----'
+        Write-Host ''
+        Write-Host '── Optional: RealTrackerSmoke' -ForegroundColor DarkCyan
         $trackerDir = Find-RealTrackerDir
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         if (-not $trackerDir) {
-            $skipped += 'RealTrackerSmoke'
+            $sw.Stop()
+            $results.Add([pscustomobject]@{
+                Name = 'RealTrackerSmoke'; Status = 'SKIP'; Ms = $sw.Elapsed.TotalMilliseconds
+                Detail = 'Tracker.exe not found via vswhere'
+            })
             Write-ValLog 'Real Tracker.exe not found; skipping smoke.' 'WARN'
         }
         else {
@@ -131,17 +199,22 @@ try {
                 Assert-True (Test-Path $outFile) 'real Tracker child wrote output'
                 $dirs = @(Get-ChildItem $cache -Directory)
                 Assert-True ($dirs.Count -ge 1) 'real Tracker produced a cache hash dir'
-                $complete = Test-Path (Join-Path $dirs[0].FullName 'complete.flag')
-                Assert-True $complete 'real Tracker path should publish complete.flag'
-                # Second run should skip
+                Assert-True (Test-Path (Join-Path $dirs[0].FullName 'complete.flag')) 'real Tracker should publish complete.flag'
                 $p2 = [System.Diagnostics.Process]::Start($psi)
                 $p2.WaitForExit()
                 Assert-ExitCode 0 $p2.ExitCode 'real Tracker smoke up-to-date'
-                $passed += 'RealTrackerSmoke'
-                Write-ValLog 'PASS RealTrackerSmoke' 'PASS'
+                $sw.Stop()
+                $results.Add([pscustomobject]@{
+                    Name = 'RealTrackerSmoke'; Status = 'PASS'; Ms = $sw.Elapsed.TotalMilliseconds; Detail = $null
+                })
+                Write-ValLog ("PASS RealTrackerSmoke ({0})" -f (Format-DurationMs $sw.Elapsed.TotalMilliseconds)) 'PASS'
             }
             catch {
-                $failed += 'RealTrackerSmoke'
+                $sw.Stop()
+                $results.Add([pscustomobject]@{
+                    Name = 'RealTrackerSmoke'; Status = 'FAIL'; Ms = $sw.Elapsed.TotalMilliseconds
+                    Detail = $_.Exception.Message
+                })
                 Write-ValLog "FAIL RealTrackerSmoke: $($_.Exception.Message)" 'FAIL'
             }
         }
@@ -165,13 +238,23 @@ finally {
     }
 }
 
+$suiteSw.Stop()
+$passed = @($results | Where-Object { $_.Status -eq 'PASS' })
+$failed = @($results | Where-Object { $_.Status -eq 'FAIL' })
+$skipped = @($results | Where-Object { $_.Status -eq 'SKIP' })
+
+Write-Banner 'Summary'
+Write-ResultTable $results
 Write-Host ''
-Write-ValLog "Passed: $($passed.Count)  Failed: $($failed.Count)  Skipped: $($skipped.Count)"
-if ($passed.Count) { Write-ValLog ("  PASS: " + ($passed -join ', ')) }
-if ($failed.Count) { Write-ValLog ("  FAIL: " + ($failed -join ', ')) 'FAIL' }
-if ($skipped.Count) { Write-ValLog ("  SKIP: " + ($skipped -join ', ')) 'WARN' }
+$totalMs = ($results | Measure-Object -Property Ms -Sum).Sum
+if ($null -eq $totalMs) { $totalMs = 0 }
+Write-Host ("  Totals:  {0} passed  ·  {1} failed  ·  {2} skipped" -f $passed.Count, $failed.Count, $skipped.Count) -ForegroundColor White
+Write-Host ("  Scenario time: {0}   Wall clock: {1}" -f (Format-DurationMs $totalMs), (Format-DurationMs $suiteSw.Elapsed.TotalMilliseconds)) -ForegroundColor DarkGray
+Write-Host ''
 
 if ($failed.Count -gt 0) {
+    Write-Host '  RESULT: FAILED' -ForegroundColor Red
     exit 1
 }
+Write-Host '  RESULT: PASSED' -ForegroundColor Green
 exit 0

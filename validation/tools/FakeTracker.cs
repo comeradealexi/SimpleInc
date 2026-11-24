@@ -4,21 +4,26 @@
 // Environment knobs (all optional):
 //   SIMPLEINC_FAKE_READS       ;-separated absolute paths → *.read.*.tlog
 //   SIMPLEINC_FAKE_WRITES      ;-separated absolute paths → *.write.*.tlog
+//   SIMPLEINC_FAKE_READS_FILE  text file, one absolute path per line (for large lists)
+//   SIMPLEINC_FAKE_WRITES_FILE same for writes
 //   SIMPLEINC_FAKE_NEWLINE     crlf | lf | none  (default crlf)
 //   SIMPLEINC_FAKE_DUP_PATHS   1 → emit each path twice in the tlog
 //   SIMPLEINC_FAKE_EMPTY_TLOG  1 → header-only tlogs (no paths)
 //   SIMPLEINC_FAKE_SKIP_TLOGS  1 → do not write tlogs after the child
 //   SIMPLEINC_FAKE_BOM         0 → omit UTF-16 BOM
 //   SIMPLEINC_FAKE_PREFIX      tlog filename prefix (default "tool")
+//   SIMPLEINC_FAKE_TLOG_SHARDS N → split paths across N read and N write tlog files
 //   SIMPLEINC_FAKE_FORCE_EXIT  if set, exit with this code and skip child/tlogs
 //   SIMPLEINC_FAKE_RUNLOG      path to append one line per FakeTracker invocation
 //   SIMPLEINC_FAKE_CACHE_ROOT_MARKER  if set, write this relative name under /i before child
+//   SIMPLEINC_FAKE_CHILD_DELAY_MS     sleep this many ms before running the child
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 internal static class FakeTracker
 {
@@ -52,6 +57,16 @@ internal static class FakeTracker
             File.WriteAllText(Path.Combine(cacheDir, marker), "1", Encoding.UTF8);
         }
 
+        string delayRaw = Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_CHILD_DELAY_MS");
+        if (!string.IsNullOrEmpty(delayRaw))
+        {
+            int ms;
+            if (int.TryParse(delayRaw, out ms) && ms > 0)
+            {
+                Thread.Sleep(ms);
+            }
+        }
+
         int childExit = RunCommand(command);
         if (childExit != 0)
         {
@@ -69,12 +84,66 @@ internal static class FakeTracker
             prefix = "tool";
         }
 
-        WriteTlog(Path.Combine(cacheDir, prefix + ".read.1.tlog"),
-            ParseList(Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_READS")));
-        WriteTlog(Path.Combine(cacheDir, prefix + ".write.1.tlog"),
-            ParseList(Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_WRITES")));
+        List<string> reads = CollectPaths(
+            Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_READS"),
+            Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_READS_FILE"));
+        List<string> writes = CollectPaths(
+            Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_WRITES"),
+            Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_WRITES_FILE"));
+
+        int shards = 1;
+        string shardRaw = Environment.GetEnvironmentVariable("SIMPLEINC_FAKE_TLOG_SHARDS");
+        if (!string.IsNullOrEmpty(shardRaw))
+        {
+            int.TryParse(shardRaw, out shards);
+            if (shards < 1) shards = 1;
+        }
+
+        WriteShardedTlogs(cacheDir, prefix, "read", reads, shards);
+        WriteShardedTlogs(cacheDir, prefix, "write", writes, shards);
 
         return 0;
+    }
+
+    private static void WriteShardedTlogs(string cacheDir, string prefix, string kind, List<string> paths, int shards)
+    {
+        if (shards <= 1)
+        {
+            WriteTlog(Path.Combine(cacheDir, prefix + "." + kind + ".1.tlog"), paths);
+            return;
+        }
+
+        var buckets = new List<string>[shards];
+        for (int i = 0; i < shards; i++)
+        {
+            buckets[i] = new List<string>();
+        }
+        for (int i = 0; i < paths.Count; i++)
+        {
+            buckets[i % shards].Add(paths[i]);
+        }
+        for (int i = 0; i < shards; i++)
+        {
+            WriteTlog(Path.Combine(cacheDir, prefix + "." + kind + "." + (i + 1) + ".tlog"), buckets[i]);
+        }
+    }
+
+    private static List<string> CollectPaths(string semicolonList, string listFile)
+    {
+        var list = ParseList(semicolonList);
+        if (!string.IsNullOrEmpty(listFile) && File.Exists(listFile))
+        {
+            foreach (string line in File.ReadAllLines(listFile, Encoding.UTF8))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith("#"))
+                {
+                    continue;
+                }
+                list.Add(trimmed);
+            }
+        }
+        return list;
     }
 
     private static bool TryParseArgs(string[] args, out string cacheDir, out string command)
@@ -89,10 +158,6 @@ internal static class FakeTracker
             }
             else if (string.Equals(args[i], "/c", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                // Remainder of argv after /c is the child command line pieces; re-join with spaces.
-                // SimpleInc already preserves quoting in the CreateProcess command string; when the
-                // OS splits argv for FakeTracker, quotes may be stripped — EchoArgs tests cover the
-                // SimpleInc → child path using GetCommandLine, while FakeTracker re-joins for /c.
                 var sb = new StringBuilder();
                 for (int j = i + 1; j < args.Length; j++)
                 {
@@ -172,7 +237,6 @@ internal static class FakeTracker
                 joined = string.Join("\n", lines) + "\n";
                 break;
             case "none":
-                // Final path line has no trailing newline (still separate earlier lines with CRLF).
                 joined = string.Join("\r\n", lines);
                 break;
             default:

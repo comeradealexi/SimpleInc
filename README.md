@@ -28,6 +28,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\validation\Run-Validation.
 
 Optional: `-UseRealTracker`, `-KeepWorkRoot`, `-Filter <name>`, `-SkipBuild`. Details in `validation/README.md`.
 
+The runner prints a timed per-scenario table and a final pass/fail/skip rollup.
+
 ### Suite TLDR (what each scenario covers)
 
 | Script | What it checks |
@@ -43,6 +45,15 @@ Optional: `-UseRealTracker`, `-KeepWorkRoot`, `-Filter <name>`, `-SkipBuild`. De
 | `Test-MissingTracker` | Missing `Tracker.exe` → non-zero exit and no `complete.flag`. |
 | `Test-CacheIdentity` | Different commands get different hash dirs; same command reuses its dir and skips. |
 | `Test-InterruptedAndConcurrent` | Partial publish forces rebuild; skip-tlogs still publishes sentinel; concurrent identical runs exit 0 without a false-complete stamp. |
+| `Test-LargeTlog` | Hundreds of read/write paths via list files + sharded `.tlog`s; up-to-date skip; mid-list mtime dirty. |
+| `Test-DeepLongPaths` | Deep nested directories + long filenames survive cache round-trip and skip. |
+| `Test-SameMtimeRecreate` | Delete/recreate with identical FILETIME does **not** invalidate (documents mtime-only pitfall); real mtime bump does. |
+| `Test-PathCase` | Tracker casing preserved; NTFS case-insensitive open still up-to-date. |
+| `Test-ReadOnlyCache` | Read-only cache files must not cause a silent up-to-date skip when inputs change. |
+| `Test-LongCommandLine` | Multi-KB command lines hash/skip correctly; tiny mutation gets a new hash dir. |
+| `Test-SharedCacheRoot` | Many distinct commands concurrent under one cache root → one complete hash dir each. |
+| `Test-CwdAndEnv` | Identical command strings share a cache key across cwd/env (documents limitation). |
+| `Test-StampRace` | Overlapping same-command rebuilds must not leave a false up-to-date stamp. |
 
 `-UseRealTracker` (optional): one smoke against the real VS `Tracker.exe` if vswhere finds it.
 
