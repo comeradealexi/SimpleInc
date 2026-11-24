@@ -12,5 +12,20 @@ We expand on this by also writing out the last modified timestamp of the files a
 
 # Building
 
+Open `SimpleInc.sln` in Visual Studio 2022 (v143) and build x64 Debug/Release, or:
+
+```text
+msbuild SimpleInc.sln /p:Configuration=Release /p:Platform=x64
+```
+
+# Validation
+
+On Windows, run the automated suite (builds helpers, exercises cache/CLI/tlog edge cases, cleans temp files):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\validation\Run-Validation.ps1
+```
+
+See `validation/README.md` for options (`-UseRealTracker`, `-KeepWorkRoot`, …).
 
 # Limitations
